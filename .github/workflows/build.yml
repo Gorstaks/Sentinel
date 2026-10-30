@@ -1,0 +1,205 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+# Obsolete builds should not consume runners after a newer push to the same branch/PR.
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Verify original NanoAV source scope
+      run: python tools/validation/VerifyNanoAVSource.py
+
+    # The .NET 10 SDK builds everything: the net48 projects (core/service/agent/tests)
+    # consume 8.0-pinned NuGet packages but do NOT need the 8.0 SDK, and the MlTrainer
+    # tool targets net10.0. Verified locally with only 10.0.400 installed.
+    - name: Setup .NET 10
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: Exercise Command Prompt build entry point
+      shell: cmd
+      run: installer\build.bat -StampOnly
+
+    - name: Security template compatibility regression
+      shell: pwsh
+      run: ./tests/Sentinel.Tests/SecurityTemplate.Tests.ps1
+
+    - name: Firewall policy regression tests
+      shell: pwsh
+      run: ./tests/Sentinel.Tests/LocalFirewallPolicy.Tests.ps1
+
+    - name: Setup Node for Worker tests
+      uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+
+    - name: Worker tests
+      working-directory: worker
+      run: npm test
+
+    - name: Release artifact integrity regression tests
+      shell: pwsh
+      run: ./tests/Sentinel.Tests/ReleaseArtifacts.Tests.ps1
+
+    - name: Dashboard response rendering tests
+      run: node --test tests/dashboard-response.test.cjs
+
+    - name: Restore dependencies
+      run: dotnet restore Sentinel.sln
+
+    # Fail the build if warnings reappear - the codebase currently builds 0-warning
+    # and we want to keep it that way. -warnaserror turns any new warning into a red CI.
+    - name: Build (warnings as errors)
+      run: dotnet build Sentinel.sln -c Release --no-restore -warnaserror
+
+    - name: Require actual Defender acceptance of Core
+      shell: pwsh
+      run: ./tools/validation/WindowsDefenderScan.ps1 -InputPaths @('src/Sentinel.Core/bin/Release/net48-windows')
+
+    - name: Upload Defender validation evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: defender-build-evidence
+        path: TestResults/Defender/*
+        if-no-files-found: warn
+
+    # coverlet.msbuild instruments during build: do not use --no-build here.
+    # One test execution produces both the TRX results and coverage report.
+    - name: Test with coverage
+      run: >
+        dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj
+        -c Release --no-restore --verbosity minimal
+        --blame-hang --blame-hang-timeout 3m --blame-hang-dump-type none
+        /p:CollectCoverage=true
+        /p:CoverletOutputFormat=cobertura
+        --logger "trx;LogFileName=test-results.trx"
+        --results-directory ${{ github.workspace }}/TestResults
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: |
+          ${{ github.workspace }}/TestResults/**/*.trx
+          ${{ github.workspace }}/TestResults/**/*Sequence*.xml
+        if-no-files-found: ignore
+
+    - name: Summarize Windows test failures
+      if: always()
+      shell: pwsh
+      run: ./tools/validation/SummarizeWindowsTests.ps1
+
+    - name: Upload coverage report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage
+        path: ${{ github.workspace }}/tests/Sentinel.Tests/TestResults/coverage.cobertura.xml
+        if-no-files-found: ignore
+
+  firewall-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+    - name: Build native Windows firewall integration fixture
+      shell: pwsh
+      run: |
+        dotnet build Sentinel.sln -c Release -warnaserror
+        if ($LASTEXITCODE -ne 0) { throw 'Solution build failed' }
+        dotnet build tools/Sentinel.FirewallSmoke/Sentinel.FirewallSmoke.csproj -c Release -warnaserror
+        if ($LASTEXITCODE -ne 0) { throw 'Native firewall fixture build failed' }
+    - name: Exercise real local and Group Policy firewall stores on disposable runner
+      shell: powershell
+      run: ./tools/validation/WindowsFirewallSmoke.ps1
+
+  dns-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+    - name: Build native DNS validation fixture
+      run: dotnet build Sentinel.sln -c Release -warnaserror
+    - name: Exercise DNS repair and emergency restoration on disposable runner
+      shell: powershell
+      run: ./tools/validation/WindowsDnsSmoke.ps1
+    - name: Upload DNS validation results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: dns-test-results
+        path: TestResults/*.trx
+        if-no-files-found: ignore
+
+  exploitshield-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+    - name: Publish ExploitShield and build native task fixture
+      shell: pwsh
+      run: |
+        dotnet publish tools/Sentinel.ExploitShield/Sentinel.ExploitShield.csproj -c Release -warnaserror -o "$env:RUNNER_TEMP/exploitshield-payload"
+        if ($LASTEXITCODE -ne 0) { throw 'ExploitShield publication failed' }
+        dotnet build tools/Sentinel.ExploitShieldSmoke/Sentinel.ExploitShieldSmoke.csproj -c Release -warnaserror
+        if ($LASTEXITCODE -ne 0) { throw 'Native task fixture build failed' }
+    - name: Exercise native WUA access and protected SYSTEM task lifecycle
+      shell: powershell
+      run: ./tools/validation/WindowsExploitShieldSmoke.ps1
+
+  endpoint-protection-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+    - name: Build endpoint containment and attribution fixtures
+      run: dotnet build tests/Sentinel.Tests/Sentinel.Tests.csproj -c Release -warnaserror
+    - name: Verify native containment, registry attribution and runtime providers
+      shell: pwsh
+      run: |
+        dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj -c Release --no-build --filter 'FullyQualifiedName~EndpointProtectionWindowsTests|FullyQualifiedName~LoaderPayloadWindowsTests|FullyQualifiedName~Release343WindowsTests|FullyQualifiedName~Release345WindowsTests|FullyQualifiedName~Release346WindowsTests' --logger 'trx;LogFileName=endpoint-native.trx' --results-directory TestResults
+        if ($LASTEXITCODE -ne 0) { throw 'Native endpoint protection tests failed' }
+        [xml]$results = Get-Content TestResults/endpoint-native.trx
+        $counters = $results.TestRun.ResultSummary.Counters
+        if ([int]$counters.executed -ne 13 -or [int]$counters.passed -ne 13 -or [int]$counters.failed -ne 0 -or [int]$counters.notExecuted -ne 0) {
+          throw 'All thirteen native endpoint fixtures must execute and pass; skips are not validation'
+        }
+    - name: Verify legacy NanoAV migration on disposable Windows
+      shell: powershell
+      run: ./tools/validation/WindowsNanoAvMigrationSmoke.ps1
+
+    - name: Upload endpoint validation results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: endpoint-native-results
+        path: TestResults/*.trx
+        if-no-files-found: ignore

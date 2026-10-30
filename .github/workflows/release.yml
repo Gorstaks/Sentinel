@@ -1,0 +1,294 @@
+name: Release
+
+# Publish an unreleased version after its exact commit passes Build & Test.
+# Only successful push builds on trusted release branches may enter the publishing job.
+# Existing releases remain immutable; version.txt is still the single version source.
+on:
+  workflow_run:
+    workflows: [ "Build & Test" ]
+    types: [ completed ]
+    branches: [ main, master ]
+  workflow_dispatch: {}   # manually retry the current branch when necessary
+
+permissions:
+  contents: write         # required to create tags and releases
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Read version
+        # Source-preservation verification also runs for manual release retries.
+        id: ver
+        shell: pwsh
+        run: |
+          python tools/validation/VerifyNanoAVSource.py
+          if ($LASTEXITCODE -ne 0) { throw "NanoAV source-scope verification failed" }
+          $v = (Get-Content version.txt -Raw).Trim()
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "version.txt is not MAJOR.MINOR.PATCH: '$v'" }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Release version: $v"
+
+      - name: Check if release already exists
+        id: exists
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v${{ steps.ver.outputs.version }}"
+          $previousPreference = $ErrorActionPreference
+          try {
+            $ErrorActionPreference = 'Continue'
+            $lookup = gh release view $tag --json tagName 2>&1 | Out-String
+            $lookupExit = $LASTEXITCODE
+          } finally {
+            $ErrorActionPreference = $previousPreference
+          }
+          if ($lookupExit -eq 0) {
+            Write-Host "Release $tag already exists - nothing to do."
+            "skip=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } elseif ($lookup -match 'release not found|HTTP 404|Not Found') {
+            Write-Host "Release $tag does not exist - will build and publish."
+            "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            throw "Release lookup failed (exit $lookupExit): $lookup"
+          }
+          # Actions propagates LASTEXITCODE at script exit, including a handled 404.
+          $global:LASTEXITCODE = 0
+
+
+      # The .NET 10 SDK builds every project: the net48 projects consume 8.0-pinned NuGet
+      # packages (no 8.0 SDK needed) and the tools target net10.0. Matches build.yml.
+      - name: Setup .NET 10
+        if: steps.exists.outputs.skip == 'false'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node for Worker tests
+        if: steps.exists.outputs.skip == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Verify security template compatibility
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: ./tests/Sentinel.Tests/SecurityTemplate.Tests.ps1
+
+      - name: Build solution and verify Windows tests before packaging
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: |
+          dotnet build Sentinel.sln -c Release -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw "Release build failed" }
+          # Check import boundaries and log-derived safety regressions before the longer suite.
+          dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj -c Release --no-build --blame-hang --blame-hang-timeout 3m --blame-hang-dump-type none --logger "trx;LogFileName=safety-tests.trx" --results-directory TestResults/Safety --filter "FullyQualifiedName~DnsRepairServiceTests|FullyQualifiedName~DnsRepairAuthorizationTests|FullyQualifiedName~NativeResolverCompletenessTests|FullyQualifiedName~NativeProcessExitVerifierTests|FullyQualifiedName~ProcessTreeWindowsTests|FullyQualifiedName~MonitorGroupTests|FullyQualifiedName~JsonlEventLoggerTests|FullyQualifiedName~RootStoreGuardTests|FullyQualifiedName~NamedPipeMonitorTests|FullyQualifiedName~CveApplicabilityRegressionTests"
+          if ($LASTEXITCODE -ne 0) { throw "Release safety regression checks failed; release blocked" }
+          dotnet test tests/Sentinel.Tests/Sentinel.Tests.csproj -c Release --no-build --blame-hang --blame-hang-timeout 3m --blame-hang-dump-type none --logger "trx;LogFileName=release-tests.trx" --results-directory TestResults
+          if ($LASTEXITCODE -ne 0) { throw "Windows regression tests failed; release blocked" }
+          [xml]$trx = Get-Content TestResults/release-tests.trx -Raw
+          if ([int]$trx.TestRun.ResultSummary.Counters.executed -lt 1) { throw "No Windows tests executed; release blocked" }
+
+      - name: Verify Worker authentication and evidence handling
+        if: steps.exists.outputs.skip == 'false'
+        working-directory: worker
+        run: npm test
+
+      - name: Verify native ExploitShield task and WUA boundary
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: |
+          dotnet publish tools/Sentinel.ExploitShield/Sentinel.ExploitShield.csproj -c Release -warnaserror -o "$env:RUNNER_TEMP/exploitshield-payload"
+          if ($LASTEXITCODE -ne 0) { throw 'ExploitShield publication failed' }
+          dotnet build tools/Sentinel.ExploitShieldSmoke/Sentinel.ExploitShieldSmoke.csproj -c Release -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Native task fixture build failed' }
+          & powershell.exe -NoProfile -File tools/validation/WindowsExploitShieldSmoke.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Native ExploitShield smoke failed; release blocked' }
+
+      - name: Verify legacy NanoAV migration on disposable Windows
+        if: steps.exists.outputs.skip == 'false'
+        shell: powershell
+        run: ./tools/validation/WindowsNanoAvMigrationSmoke.ps1
+
+      - name: Verify dashboard response outcome rendering
+        if: steps.exists.outputs.skip == 'false'
+        run: node --test tests/dashboard-response.test.cjs
+
+      - name: Smoke test the Windows Framework diagnostic executable
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: |
+          $diag = Resolve-Path tools/Sentinel.Diagnostics/bin/Release/net48-windows/Sentinel.Diagnostics.exe
+          $dir = Join-Path $env:RUNNER_TEMP "sentinel-diagnostics-$([guid]::NewGuid().ToString('N'))"
+          New-Item -ItemType Directory $dir | Out-Null
+          $events = @(
+            @{ RuleName='LSASS Credential Dump'; Confidence=0.95; ProcessId=9001; ProcessName='fixture.exe'; Timestamp='2020-01-01T00:00:00Z' },
+            @{ RuleName='C2 Beaconing Statistical'; Confidence=0.95; ProcessId=9001; ProcessName='fixture.exe'; Timestamp='2020-01-01T00:00:02Z' }
+          )
+          $events | ForEach-Object { $_ | ConvertTo-Json -Compress } | Set-Content "$dir/events.jsonl"
+          '{"Threshold":80,"MinDistinctCategories":2}' | Set-Content "$dir/config.json"
+          & $diag replay "$dir/events.jsonl" "$dir/config.json" | Set-Content "$dir/replay.json"
+          if ($LASTEXITCODE -ne 0) { throw "Diagnostic replay failed" }
+          $report = Get-Content "$dir/replay.json" -Raw | ConvertFrom-Json
+          if ($report.InputCount -ne 2 -or $report.Composites.Count -ne 1 -or $report.Composites[0].AuthorizedResponse -ne 'LogOnly') { throw "Unexpected replay outcome" }
+          & $diag preview-export "$dir/events.jsonl"
+          if ($LASTEXITCODE -ne 0) { throw "Export preview failed" }
+          & $diag export "$dir/events.jsonl" "$dir/investigation.zip"
+          if ($LASTEXITCODE -ne 0) { throw "Redacted export failed" }
+          Expand-Archive "$dir/investigation.zip" "$dir/pack"
+          & $diag verify-pack "$dir/pack"
+          if ($LASTEXITCODE -ne 0) { throw "Export verification failed" }
+
+      - name: Upload release test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-test-results
+          path: |
+            TestResults/**/*.trx
+            TestResults/**/*Sequence*.xml
+          if-no-files-found: ignore
+
+      - name: Summarize Windows test results
+        if: always()
+        shell: pwsh
+        run: ./tools/validation/SummarizeWindowsTests.ps1
+
+      # build.ps1 requires the Inno Setup compiler (ISCC.exe). The Chocolatey package
+      # installs it to C:\Program Files (x86)\Inno Setup 6\ - one of the paths build.ps1
+      # already probes.
+      - name: Install Inno Setup
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      # Reuse the exact local build path: stamps every csproj + setup.iss from version.txt,
+      # publishes Service + Agent (net48, framework-dependent), compiles the installer with
+      # Inno Setup, and copies it to releases\<version>\.
+      - name: Build installer
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: ./installer/build.ps1
+
+      - name: Verify installer artifact
+        if: steps.exists.outputs.skip == 'false'
+        id: artifact
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $path = "releases/$v/SentinelSetup-$v.exe"
+          if (-not (Test-Path $path)) { throw "Installer not found at $path" }
+          $sizeMb = [math]::Round((Get-Item $path).Length / 1MB, 2)
+          Write-Host "Installer: $path ($sizeMb MB)"
+          "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      # Extract the CHANGELOG section for this version as release notes (same behavior as
+      # installer/release.ps1's Get-ChangelogNotes). Falls back to a one-liner if absent.
+      - name: Extract release notes
+        if: steps.exists.outputs.skip == 'false'
+        id: notes
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $fallback = "Sentinel $v. See docs/CHANGELOG.md for details."
+          $out = "release-notes.md"
+          $changelog = "docs/CHANGELOG.md"
+          if (-not (Test-Path $changelog)) {
+            Set-Content -Path $out -Value $fallback -Encoding UTF8
+          } else {
+            $lines = Get-Content $changelog
+            $escaped = [regex]::Escape($v)
+            $headingRe = "^##\s*\[$escaped\]"
+            $anyHeadingRe = '^##\s*\['
+            $start = -1
+            for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match $headingRe) { $start = $i; break } }
+            if ($start -lt 0) {
+              Set-Content -Path $out -Value $fallback -Encoding UTF8
+            } else {
+              $body = New-Object System.Collections.Generic.List[string]
+              for ($j = $start + 1; $j -lt $lines.Count; $j++) {
+                if ($lines[$j] -match $anyHeadingRe) { break }
+                $body.Add($lines[$j])
+              }
+              $text = ($body -join "`n").Trim()
+              if ([string]::IsNullOrWhiteSpace($text)) {
+                Set-Content -Path $out -Value $fallback -Encoding UTF8
+              } else {
+                Set-Content -Path $out -Value "## Sentinel $v`n`n$text" -Encoding UTF8
+              }
+            }
+          }
+          Write-Host "Notes written to $out"
+
+      - name: Prepare Worker copy and checksums
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          Copy-Item worker/src/index.js "releases/$v/SentinelWorker-$v.js"
+          dotnet publish tools/Sentinel.Diagnostics/Sentinel.Diagnostics.csproj -c Release -f net48-windows -r win-x64 --self-contained false -o "releases/$v/diagnostics"
+          if ($LASTEXITCODE -ne 0) { throw "Diagnostic publication failed" }
+          Compress-Archive -Path "releases/$v/diagnostics/*" -DestinationPath "releases/$v/SentinelDiagnostics-$v.zip"
+          $files = @("releases/$v/SentinelSetup-$v.exe", "releases/$v/SentinelWorker-$v.js", "releases/$v/SentinelDiagnostics-$v.zip")
+          $lines = foreach ($file in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 $file).Hash.ToLowerInvariant()
+            "$hash  $(Split-Path $file -Leaf)"
+          }
+          $lines | Set-Content "releases/$v/SHA256SUMS.txt" -Encoding ascii
+
+      - name: Require Defender acceptance of exact installer and runtime payloads
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        timeout-minutes: 15
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          ./tools/validation/WindowsDefenderScan.ps1 -InputPaths @("releases/$v/SentinelSetup-$v.exe", 'publish/service', 'publish/agent', 'publish/autorotate', 'publish/exploitshield')
+
+      - name: Upload release Defender evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: defender-release-evidence
+          path: TestResults/Defender/*
+          if-no-files-found: warn
+
+      - name: Create GitHub release
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          gh release create "v$v" "${{ steps.artifact.outputs.path }}" "releases/$v/SentinelWorker-$v.js" "releases/$v/SentinelDiagnostics-$v.zip" "releases/$v/SHA256SUMS.txt" `
+            --title "Sentinel $v" `
+            --notes-file release-notes.md `
+            --target ${{ github.event.workflow_run.head_sha || github.sha }}
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+
+      - name: Verify published artifact bytes and manifest
+        if: steps.exists.outputs.skip == 'false'
+        shell: pwsh
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $published = Join-Path $env:RUNNER_TEMP ('sentinel-published-' + [Guid]::NewGuid().ToString('N'))
+          gh release download "v$v" --dir $published --pattern "SentinelSetup-$v.exe" --pattern "SentinelWorker-$v.js" --pattern "SentinelDiagnostics-$v.zip" --pattern "SHA256SUMS.txt"
+          if ($LASTEXITCODE -ne 0) { throw 'Published release download failed' }
+          ./tools/validation/VerifyReleaseArtifacts.ps1 -Version $v -ReferenceDirectory "releases/$v" -PublishedDirectory $published
