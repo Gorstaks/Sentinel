@@ -1,0 +1,13 @@
+﻿{
+    "StartedUtc":  "2026-10-27T23:58:13.7294280Z",
+    "Status":  "NotPassed",
+    "Engine":  null,
+    "Signature":  null,
+    "SignatureUpdated":  null,
+    "Files":  [
+
+              ],
+    "ExitCode":  null,
+    "Error":  "The specified module \u0027Defender\u0027 was not loaded because no valid module file was found in any module directory.",
+    "DetectionEvidenceError":  "CommandNotFoundException"
+}
