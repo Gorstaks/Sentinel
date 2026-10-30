@@ -21,7 +21,7 @@ using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
-using System.Text.Json;
+using System.Runtime.Serialization.Json;
 using System.Threading;
 using Microsoft.Win32;
 
@@ -68,7 +68,8 @@ internal static class Rotator
         if (!File.Exists(StatePath)) return null;
         using (FileStream stream = File.OpenRead(StatePath))
         {
-            return JsonSerializer.Deserialize<RotatorState>(stream);
+            var serializer = new DataContractJsonSerializer(typeof(RotatorState));
+            return serializer.ReadObject(stream) as RotatorState;
         }
     }
 
@@ -77,7 +78,8 @@ internal static class Rotator
         string temporary = StatePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         using (FileStream stream = File.Create(temporary))
         {
-            JsonSerializer.Serialize(stream, state);
+            var serializer = new DataContractJsonSerializer(typeof(RotatorState));
+            serializer.WriteObject(stream, state);
         }
         if (File.Exists(StatePath))
             File.Replace(temporary, StatePath, null);

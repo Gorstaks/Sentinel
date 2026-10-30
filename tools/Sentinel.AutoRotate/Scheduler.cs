@@ -102,7 +102,7 @@ internal static class Scheduler
         return BuildTask(
             "Resets the target account password to blank once per boot, before sign-in.",
             new XElement(TaskNs + "BootTrigger", new XElement(TaskNs + "Enabled", "true")),
-            "S-1-5-18", "ServiceAccount",
+            "S-1-5-18", null,
             exePath, "--boot",
             "PT2M");
     }
@@ -119,7 +119,7 @@ internal static class Scheduler
             "PT0S");
     }
 
-    private static XDocument BuildTask(string description, XElement trigger, string userId, string logonType, string exePath, string argument, string executionLimit)
+    private static XDocument BuildTask(string description, XElement trigger, string userId, string? logonType, string exePath, string argument, string executionLimit)
     {
         var settings = new XElement(TaskNs + "Settings",
             new XElement(TaskNs + "MultipleInstancesPolicy", "IgnoreNew"),
@@ -138,11 +138,15 @@ internal static class Scheduler
                 new XElement(TaskNs + "Interval", "PT1M"),
                 new XElement(TaskNs + "Count", "3")));
 
+        // A null logonType omits the element. Task Scheduler rejects LogonType "ServiceAccount" for
+        // S-1-5-18 on this machine ("incorrectly formatted or out of range", line 14), and it does
+        // not need the element for SYSTEM.
         var principal = new XElement(TaskNs + "Principal",
             new XAttribute("id", "Author"),
-            new XElement(TaskNs + "UserId", userId),
-            new XElement(TaskNs + "LogonType", logonType),
-            new XElement(TaskNs + "RunLevel", "HighestAvailable"));
+            new XElement(TaskNs + "UserId", userId));
+        if (logonType != null)
+            principal.Add(new XElement(TaskNs + "LogonType", logonType));
+        principal.Add(new XElement(TaskNs + "RunLevel", "HighestAvailable"));
 
         var doc = new XDocument(
             new XElement(TaskNs + "Task",

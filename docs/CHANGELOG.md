@@ -1,5 +1,9 @@
 # Changelog
 
+## [3.5.5] - 2026-10-30
+
+- Fix `SentinelAutoRotate` failing during install with "SentinelAutoRotate was not enabled". The tool targets .NET Framework 4.8 but stored its state with `System.Text.Json` 8.0.5, which does not load on that runtime. The first state save threw an unhandled `FileLoadException`, so install stopped before blanking the password or registering tasks. State is now stored with `DataContractJsonSerializer` from the .NET Framework itself, and the package reference is removed. Upgrade setup now stops the watchdog and service, then repeatedly force-stops `Sentinel.Service.exe` and `Sentinel.Agent.exe` until none remain, for up to 30 seconds. It no longer copies files while a Sentinel process is still running, and it stops with a message if the processes cannot be stopped. The project is built as a Windows application, so the background session worker no longer opens a console window. The project builds with no warnings. The boot task also failed to register because Task Scheduler rejected `LogonType` `ServiceAccount` for SYSTEM. That element is now omitted for the boot task. Not yet run on a Windows machine, because running install blanks the account password.
+
 ## [3.5.4] - 2026-10-30
 
 - Fix uninstall leaving `Sentinel.Service.exe` and `Sentinel.Agent.exe` behind. The fallback cleanup deleted service registrations only after killing the processes. A killed registered service counts as a crash, so SCM restarted it after 2 seconds, and its watchdog relaunched the agent, which kept the files locked. The fallback now deletes the registrations first and kills in a loop until no Sentinel process remains. The service, agent and rotator files carry `uninsrestartdelete`, so a file still locked at uninstall is removed at the next restart. Not yet reproduced or tested on a Windows machine.

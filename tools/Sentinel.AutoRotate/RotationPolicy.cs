@@ -3,26 +3,32 @@
 
 using System;
 using System.Globalization;
+using System.Runtime.Serialization;
 using System.Security.Cryptography;
 
 namespace Sentinel.AutoRotate;
 
-/// <summary>Non-secret installation state, stored as JSON in the protected state directory.</summary>
+/// <summary>
+/// Non-secret installation state, stored as JSON in the protected state directory.
+/// Uses DataContractJsonSerializer, which ships with .NET Framework 4.8. System.Text.Json does not
+/// load on this target runtime and crashed the installer during its first save.
+/// </summary>
+[DataContract]
 internal sealed class RotatorState
 {
-    public bool Installed { get; set; }
-    public bool RotationEnabled { get; set; }
-    public string Account { get; set; } = string.Empty;
-    public string Sid { get; set; } = string.Empty;
+    [DataMember] public bool Installed { get; set; }
+    [DataMember] public bool RotationEnabled { get; set; }
+    [DataMember] public string Account { get; set; } = string.Empty;
+    [DataMember] public string Sid { get; set; } = string.Empty;
 
     /// <summary>ISO-8601 UTC instant of the boot that the last boot reset belongs to.</summary>
-    public string BootUtc { get; set; } = string.Empty;
+    [DataMember] public string BootUtc { get; set; } = string.Empty;
 
     /// <summary>True once the blank reset for the current boot succeeded.</summary>
-    public bool ResetSucceeded { get; set; }
+    [DataMember] public bool ResetSucceeded { get; set; }
 
     /// <summary>ISO-8601 UTC instant when the last boot reset succeeded. Starts the rotation timer.</summary>
-    public string ResetUtc { get; set; } = string.Empty;
+    [DataMember] public string ResetUtc { get; set; } = string.Empty;
 }
 
 internal enum RotationAction

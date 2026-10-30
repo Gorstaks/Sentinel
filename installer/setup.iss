@@ -1,16 +1,16 @@
 [Setup]
 AppName=Sentinel
-AppVersion=3.5.4
+AppVersion=3.5.5
 AppPublisher=Gorstak
 AppPublisherURL=https://gorstak.eu
 AppCopyright=Copyright (C) 2026 Gorstak
-VersionInfoVersion=3.5.4.0
+VersionInfoVersion=3.5.5.0
 VersionInfoCompany=Gorstak
 VersionInfoDescription=Sentinel Endpoint Detection and Response Setup
 VersionInfoCopyright=Copyright (C) 2026 Gorstak
 VersionInfoProductName=Sentinel EDR
-VersionInfoProductVersion=3.5.4.0
-VersionInfoOriginalFileName=SentinelSetup-3.5.4.exe
+VersionInfoProductVersion=3.5.5.0
+VersionInfoOriginalFileName=SentinelSetup-3.5.5.exe
 SourceDir=.
 DefaultDirName={autopf}\Sentinel
 DefaultGroupName=Sentinel
@@ -20,7 +20,7 @@ UninstallDisplayIcon={app}\Sentinel.ico
 Compression=lzma/max
 SolidCompression=no
 OutputDir=.
-OutputBaseFilename=SentinelSetup-3.5.4
+OutputBaseFilename=SentinelSetup-3.5.5
 PrivilegesRequired=admin
 SetupMutex=Global\SentinelSetupMutex
 UsePreviousAppDir=yes
@@ -198,10 +198,47 @@ begin
   end;
 end;
 
+// One pass: force-kills the Sentinel service and agent images. Returns True when a process
+// was found and killed, False when taskkill reports no matching process (exit 128).
+function KillSentinelImagesOnce(): Boolean;
+var
+  ResultCode: Integer;
+  Taskkill: String;
+begin
+  Result := False;
+  Taskkill := SysNative('taskkill.exe');
+  Exec(Taskkill, '/F /IM "Sentinel.Service.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if ResultCode <> 128 then Result := True;
+  Exec(Taskkill, '/F /IM "Sentinel.Agent.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if ResultCode <> 128 then Result := True;
+  Exec(Taskkill, '/F /IM "SentinelAutoRotate.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if ResultCode <> 128 then Result := True;
+end;
+
+// Stops every Sentinel service and agent process before files are copied. The service can
+// restart the agent while it shuts down, so this repeats until a pass finds nothing. Users
+// upgrading should never have to end processes by hand, so if the processes cannot be
+// stopped, setup stops with a message instead of failing on a locked file.
+procedure WaitForSentinelExit();
+var
+  Attempt: Integer;
+begin
+  for Attempt := 1 to 30 do
+  begin
+    if not KillSentinelImagesOnce() then
+    begin
+      Log('Sentinel: no service or agent process remains before upgrade.');
+      Exit;
+    end;
+    Sleep(1000);
+  end;
+  RaiseException('Sentinel could not be stopped for the upgrade. Restart the computer and run setup again. If it still fails, collect the setup log and report it.');
+end;
+
 procedure StopExistingService();
 var
   ResultCode: Integer;
-  Svc, Taskkill, Sc: String;
+  Svc, Sc: String;
 begin
   if FileExists(ExpandConstant('{app}\ExploitShield\Sentinel.ExploitShield.exe')) then
   begin
@@ -227,10 +264,7 @@ begin
   Exec(Sc, 'stop Sentinel', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(2000);
 
-  Taskkill := SysNative('taskkill.exe');
-  Exec(Taskkill, '/F /IM "Sentinel.Service.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec(Taskkill, '/F /IM "Sentinel.Agent.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Sleep(1500);
+  WaitForSentinelExit();
 
   ResetInstallDirAcls(ExpandConstant('{app}'));
   ResetInstallDirAcls(ExpandConstant('{commonpf}\Sentinel'));
