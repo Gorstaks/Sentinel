@@ -11,15 +11,18 @@ namespace Sentinel.Core
         private readonly ConcurrentDictionary<int, List<DetectionEvent>> _signalBuffers = new();
         private Func<DetectionEvent, Task>? _emitCallback;
         private readonly Func<int, string?> _imagePathResolver;
+        private readonly Func<string, bool> _signatureVerifier;
         private readonly Func<int, long> _creationTimeResolver;
         private DateTime _lastPruneTime = DateTime.UtcNow;
 
         public BehavioralCorrelationEngine() : this(ResolveImagePath) { }
 
-        internal BehavioralCorrelationEngine(Func<int, string?> imagePathResolver, Func<int, long>? creationTimeResolver = null)
+        internal BehavioralCorrelationEngine(Func<int, string?> imagePathResolver, Func<int, long>? creationTimeResolver = null,
+            Func<string, bool>? signatureVerifier = null)
         {
             _imagePathResolver = imagePathResolver ?? throw new ArgumentNullException(nameof(imagePathResolver));
             _creationTimeResolver = creationTimeResolver ?? WindowsProcessTreeOperations.GetCreationTime;
+            _signatureVerifier = signatureVerifier ?? (path => SecurityValidation.VerifyAuthenticodeSignature(path));
         }
 
         private static readonly HashSet<string> ElectronAndJitApps = new(StringComparer.OrdinalIgnoreCase)
@@ -34,7 +37,6 @@ namespace Sentinel.Core
         };
 
         private const int MaxSignalsPerBuffer = 50;
-        private const int MaxAllowlistedTier2Buffer = 5;
         private static readonly TimeSpan CorrelationWindow = TimeSpan.FromSeconds(60);
         private static readonly TimeSpan PruneInterval = TimeSpan.FromSeconds(60);
 
@@ -82,32 +84,12 @@ namespace Sentinel.Core
             if (ElectronAndJitApps.Contains(stem))
             {
                 var path = _imagePathResolver(pid);
-                if (!string.IsNullOrEmpty(path) && SecurityValidation.VerifyAuthenticodeSignature(path!))
+                if (!string.IsNullOrEmpty(path) && _signatureVerifier(path!))
                 {
-                    if (signal.Tier != DetectionTier.Tier1Behavioral)
-                    {
-                        var existingBuffer = _signalBuffers!.GetValueOrDefault(pid);
-                        bool hasExistingSignals = false;
-                        if (existingBuffer != null)
-                        {
-                            lock (existingBuffer)
-                            {
-                                hasExistingSignals = existingBuffer.Count > 0;
-                            }
-                        }
-                        if (!hasExistingSignals)
-                        {
-                            var t2Buffer = _signalBuffers.GetOrAdd(pid, _ => new List<DetectionEvent>());
-                            lock (t2Buffer)
-                            {
-                                if (t2Buffer.Count < MaxAllowlistedTier2Buffer)
-                                {
-                                    t2Buffer.Add(signal);
-                                }
-                            }
-                            return;
-                        }
-                    }
+                    // Signing identifies a host; it does not establish that its runtime
+                    // behavior is safe. Preserve context without skipping correlation.
+                    signal.Metadata ??= new Dictionary<string, string>();
+                    signal.Metadata["SignedHostContext"] = "true";
                 }
             }
 

@@ -208,7 +208,7 @@ The system must implement two correlation engines that fire composite detections
 | `Sentinel:ActiveResponse` | Default **true** in config and install |
 | `Sentinel:ChainConfirmMinSignals` | Default **2** - distinct rules on same PID within window required |
 | `Sentinel:ChainConfirmWindowSeconds` | Default **300** - rolling correlation window |
-| `Sentinel:SilentObserve` | Default **true** - no toasts or auto evidence packs until chain-confirmed |
+| `Sentinel:SilentObserve` | Default **true** - notify/report confirmed chains and immediate authorized kill-grade Tier1 detections; retain Tier2 observations in logs |
 | `Sentinel:EnforceActiveResponse` | Default **false** - when true, AntiTamper force-re-enables ActiveResponse if flipped off |
 | CLI `--active-response` | Optional force-enable at service start (legacy / override; not required for normal install) |
 

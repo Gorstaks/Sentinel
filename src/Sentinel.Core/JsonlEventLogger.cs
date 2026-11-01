@@ -499,7 +499,8 @@ namespace Sentinel.Core
                 }
                 // Preserve critical response observations and inventory/gap history in
                 // the companion chain without flooding it with Tier2 LogOnly responses.
-                bool chainEvent = type == "integrity_change" || type == "integrity_coverage_restored" ||
+                bool chainEvent = type == "evidence_pack_created" || type == "incident_reporting_failed" ||
+                    type == "evidence_pack_skipped" || type == "integrity_change" || type == "integrity_coverage_restored" ||
                     type == "integrity_baseline_unavailable" || type == "integrity_reconciled_after_visibility_gap" ||
                     type == "certificate_provenance" || type == "dns_repair_before" || type == "dns_repair_result" || type == "dns_configuration_change" ||
                     type == "detection" && data is DetectionEvent diagnostic &&

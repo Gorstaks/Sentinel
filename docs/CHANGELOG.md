@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.5.7] - 2026-11-01
+
+- Report immediate authorized kill-grade Tier1 detections through silent observation without requiring a legacy chain-confirmation tag. Preserve existing Tier2 observation and destructive-response boundaries.
+- Remove folder-substring-only IDE ancestry trust; require Authenticode verification. Evaluate signed-host correlation without the first-signal bypass.
+- Record evidence-pack creation, failures and cooldown/capacity skips in JSONL and the daily audit chain. See [scope and validation limits](PROTECTION_EVIDENCE_HARDENING.md).
+
 ## [3.5.6] - 2026-11-01
 
 - Hardened security policy (GSecurity.inf)

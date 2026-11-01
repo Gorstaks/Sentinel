@@ -310,7 +310,8 @@ namespace Sentinel.Core
         public int ChainConfirmWindowSeconds { get; set; } = 300;
 
         /// <summary>
-        /// When true (default): no toasts and no auto evidence packs unless chain-confirmed nuke.
+        /// When true (default): notify/report confirmed chains and immediate authorized
+        /// kill-grade Tier1 detections. Tier2 observations remain logged for investigation.
         /// Detection still writes to events.jsonl for correlation.
         /// </summary>
         public bool SilentObserve { get; set; } = true;

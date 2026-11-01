@@ -67,8 +67,8 @@ namespace Sentinel.Core
         /// many child processes (node, electron helpers, conhost, terminals). If a child
         /// triggers a detection, we kill the child but NEVER walk up and kill the IDE host
         /// - that destroys the developer's session and is an irreversible false positive.
-        /// Protection requires the binary to reside in a legitimate install path (Program Files
-        /// or user AppData/Local/Programs) to prevent abuse via renames in Temp/Downloads.
+        /// Protection requires verified signing identity, never an install-folder substring.
+        /// Staging locations remain excluded even when the binary is signed.
         /// </summary>
         private static readonly HashSet<string> IdeHostProcessNames = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -77,28 +77,6 @@ namespace Sentinel.Core
             "rider64", "idea64", "phpstorm64", "webstorm64", "goland64",
             "pycharm64", "clion64", "rubymine64", "datagrip64",
             "devenv", // Visual Studio
-        };
-
-        // Non-writable install roots: a name match here self-authorizes (an attacker cannot
-        // write Program Files / WindowsApps without already being admin/TrustedInstaller).
-        private static readonly string[] NonWritableIdePaths =
-        {
-            @"\program files\",
-            @"\program files (x86)\",
-            @"\windowsapps\",
-        };
-
-        // User-writable per-user install roots. IDEs legitimately install here, but so can an
-        // attacker drop a renamed "code.exe" - so a name match in these locations is only
-        // honored when the binary ALSO carries a valid Authenticode signature.
-        private static readonly string[] UserWritableIdePaths =
-        {
-            @"\appdata\local\programs\",
-            @"\appdata\local\kiro\",
-            @"\appdata\local\cursor\",
-            @"\appdata\local\microsoft vs code\",
-            @"\appdata\local\devin\",
-            @"\jetbrains\",
         };
 
         private static readonly string[] LegitimateBrowserPaths =
@@ -586,16 +564,17 @@ namespace Sentinel.Core
         /// <summary>
         /// v1.6.9 / hardened: Determines whether a process is a legitimate IDE/dev-tool host,
         /// so we never walk up and kill the developer's IDE on a child-process detection.
-        /// Requires the process NAME to match a known IDE stem AND a non-attacker-controllable
-        /// anchor:
-        ///   - a NON-writable install root (Program Files / WindowsApps) - self-authorizes, OR
-        ///   - a user-writable per-user install root (AppData\Local\Programs, JetBrains, ...)
-        ///     ONLY when the binary carries a valid Authenticode signature, OR
-        ///   - any other location ONLY when validly Authenticode-signed.
+        /// Requires a known IDE stem AND a valid Authenticode signature.
+        /// Install-folder substrings never establish identity or grant this exemption.
         /// A renamed "kiro.exe" / "code.exe" in Temp/Downloads (or unsigned in AppData) is NOT
         /// protected. Name + writable-path-substring alone is never sufficient.
         /// </summary>
         internal static bool IsLegitimateIdeHost(string? imagePath, string processName)
+            => IsLegitimateIdeHost(imagePath, processName,
+                path => File.Exists(path) && SecurityValidation.VerifyAuthenticodeSignature(path));
+
+        internal static bool IsLegitimateIdeHost(string? imagePath, string processName,
+            Func<string, bool> verifySignature)
         {
             if (string.IsNullOrEmpty(processName)) return false;
             var cleanName = Sentinel.Core.StringNet48.ReplaceIgnoreCase(processName, ".exe", "");
@@ -618,22 +597,9 @@ namespace Sentinel.Core
             if (inStagingDrop)
                 return false;
 
-            // Non-writable install root (Program Files / WindowsApps) -> name match is enough.
-            if (NonWritableIdePaths.Any(p => lowerPath.Contains(p)))
-                return true;
-
-            // Per-user install roots are deep, vendor-structured canonical paths
-            // (\appdata\local\programs\, \appdata\local\kiro\, \jetbrains\, ...). IDEs legitimately
-            // install per-user there, so that specific install-subpath structure is the anchor and
-            // self-authorizes. Shallow drops don't match (and were already rejected above).
-            if (UserWritableIdePaths.Any(p => lowerPath.Contains(p)))
-                return true;
-
-            // Anywhere else (e.g. a secondary drive): only protected when validly Authenticode-signed.
             try
             {
-                if (File.Exists(imagePath) && SecurityValidation.VerifyAuthenticodeSignature(imagePath))
-                    return true;
+                return verifySignature(imagePath!);
             }
             catch { /* treat as untrusted */ }
 

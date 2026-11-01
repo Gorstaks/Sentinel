@@ -1081,8 +1081,19 @@ namespace Sentinel.Core
 
         public static bool ShouldNotifyUser(DetectionEvent detection, SentinelConfig config)
         {
-            if (config == null) return false;
+            if (config == null || detection == null) return false;
             if (!config.SilentObserve)
+                return true;
+            // Immediate Tier1 response does not require the legacy ChainConfirmed tag.
+            // Silence must not hide an authorized terminal response or its evidence pack.
+            if (detection.Tier == DetectionTier.Tier1Behavioral &&
+                detection.Confidence >= (config.MinTier1Confidence > 0
+                    ? config.MinTier1Confidence : DefaultMinTier1Confidence) &&
+                IsKillGradeTerminal(detection) &&
+                (detection.AuthorizedResponse == ResponseAction.KillProcess ||
+                 detection.AuthorizedResponse == ResponseAction.KillProcessTree ||
+                 detection.AuthorizedResponse == ResponseAction.QuarantineAndKill ||
+                 detection.AuthorizedResponse == ResponseAction.NetworkIsolate))
                 return true;
             if (detection?.Metadata == null) return false;
             return detection.Metadata.TryGetValue(ChainConfirmedKey, out var v) &&

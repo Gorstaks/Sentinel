@@ -128,9 +128,10 @@ namespace Sentinel.Core
             if (!_config.Enabled || detection == null)
                 return;
 
+            string reportingStage = "Eligibility";
             try
             {
-                // Silent observe: no evidence packs / TI / toasts until chain-confirmed terminal attack.
+                // Silent observe retains reporting for immediate authorized Tier1 responses.
                 if (!ResponsePolicy.ShouldAutoReportIncident(detection, _sentinelConfig))
                     return;
 
@@ -139,12 +140,16 @@ namespace Sentinel.Core
 
                 var cooldownKey = BuildCooldownKey(detection);
                 if (IsOnCooldown(cooldownKey))
+                {
+                    await LogReportingStatusAsync("evidence_pack_skipped", detection, "Cooldown").ConfigureAwait(false);
                     return;
+                }
 
                 if (!TryAcquireRateLimitSlot())
                 {
                     _logger.LogDebug("[AutoIncidentReporter] Rate limit reached - skipping pack for {Rule}",
                         detection.RuleName);
+                    await LogReportingStatusAsync("evidence_pack_skipped", detection, "RateLimit").ConfigureAwait(false);
                     return;
                 }
 
@@ -153,8 +158,16 @@ namespace Sentinel.Core
                 string? packPath = null;
                 if (_config.GenerateLocalEvidencePack)
                 {
+                    reportingStage = "EvidencePack";
                     packPath = await WriteEvidencePackAsync(detection, incident, execution).ConfigureAwait(false);
                     Interlocked.Increment(ref _packsGenerated);
+                    reportingStage = "PostPack";
+                    if (_eventLogger != null)
+                        await _eventLogger.LogEventAsync("evidence_pack_created", new
+                        {
+                            detection.RuleName, detection.ProcessId, detection.ProcessName,
+                            PackPath = packPath, ResponseStatus = execution?.Status.ToString()
+                        }).ConfigureAwait(false);
                     try
                     {
                         if (!string.IsNullOrEmpty(packPath) && _windowsEventLog != null)
@@ -184,7 +197,7 @@ namespace Sentinel.Core
                     // 1.8.4 API: ShowCriticalToast (always delivers; CriticalOnly does not suppress)
                     var toastTitle = CoercionAbusePolicy.IsDigitalCoercionToolkit(detection)
                         ? "Sentinel: Surveillance / remote-control abuse - evidence pack ready"
-                        : "Sentinel: Attack chain confirmed - evidence pack ready";
+                        : "Sentinel: Attack detection - evidence pack ready";
                     var toastBody = CoercionAbusePolicy.IsDigitalCoercionToolkit(detection)
                         ? $"{detection.RuleName} - technical indicators of device takeover or covert surveillance. " +
                           $"Sealed pack + affidavit for {portal.PrimaryPortalName}. Path: {packPath}"
@@ -199,9 +212,17 @@ namespace Sentinel.Core
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "[AutoIncidentReporter] Failed handling detection {Rule}", detection.RuleName);
+                _logger.LogError(ex, "[AutoIncidentReporter] Failed handling detection {Rule}", detection.RuleName);
+                await LogReportingStatusAsync("incident_reporting_failed", detection,
+                    reportingStage + ":" + ex.GetType().Name).ConfigureAwait(false);
             }
         }
+
+        private Task LogReportingStatusAsync(string type, DetectionEvent detection, string reason)
+            => _eventLogger?.LogEventAsync(type, new
+            {
+                detection.RuleName, detection.ProcessId, detection.ProcessName, Reason = reason
+            }) ?? Task.CompletedTask;
 
         /// <summary>
         /// Policy gate: reportable-grade attack activity only (when ReportableGradeOnly is true).

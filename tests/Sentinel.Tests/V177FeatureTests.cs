@@ -159,8 +159,9 @@ namespace Sentinel.Tests
 
                 var threatCfg = new ThreatReportingConfig { Enabled = false };
                 var threat = new ThreatReportService(threatCfg, NullLogger<ThreatReportService>.Instance);
-                // SilentObserve default blocks packs until chain-confirmed - disable for pack-path unit test
-                var sentinelCfg = new SentinelConfig { SilentObserve = false };
+                // Immediate authorized ransomware response must produce a pack even with
+                // default silent observation and no legacy ChainConfirmed metadata.
+                var sentinelCfg = new SentinelConfig { SilentObserve = true };
                 var reporter = new AutoIncidentReporter(cfg, threat, NullLogger<AutoIncidentReporter>.Instance,
                     sentinelConfig: sentinelCfg);
 
