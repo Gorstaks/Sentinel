@@ -120,7 +120,7 @@ namespace Sentinel.Tests
                         ["BehavioralProof"] = "SocketCommandLoop", ["ProcessCreationTime"] = creation.ToString() } };
                 var refused = await engine.HandleAsync(Signal(DateTime.UtcNow.AddSeconds(-31), child, birth));
                 Assert.False(refused.HasVerifiedProcessExit(child.Id)); child.Refresh(); Assert.False(child.HasExited);
-                var result = await engine.HandleAsync(Signal(DateTime.UtcNow, child, birth));
+                var result = await engine.HandleAsync(Signal(FreshAfter(birth), child, birth));
                 Assert.True(result.HasVerifiedProcessExit(child.Id), result.Reason + " | " + string.Join("; ", result.Effects.Select(e => e.Detail)));
                 Assert.True(child.WaitForExit(5000));
                 Assert.Empty(Directory.GetFiles(Path.Combine(root, "vault")));

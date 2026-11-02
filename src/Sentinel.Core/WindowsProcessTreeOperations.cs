@@ -10,6 +10,8 @@ namespace Sentinel.Core
 {
     internal sealed class WindowsProcessTreeOperations : IProcessTreeOperations
     {
+        public long QueryCreationTime(int pid) => GetCreationTime(pid);
+
         internal static long GetCreationTime(int pid)
         {
             using var handle = new SafeProcessHandle(NativeResolver.OpenProcess(0x1000, false, pid), ownsHandle: true);

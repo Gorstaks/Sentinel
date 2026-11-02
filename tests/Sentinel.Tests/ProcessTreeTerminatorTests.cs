@@ -33,6 +33,15 @@ namespace Sentinel.Tests
             public readonly Dictionary<int, Target> Targets = new();
             public readonly List<ProcessTreeEntry> Entries = new();
             public readonly Dictionary<int, Exception> OpenThrows = new();
+            public readonly Dictionary<int, long> QueryTimes = new();
+            public readonly Dictionary<int, Exception> QueryThrows = new();
+            public long QueryCreationTime(int pid)
+            {
+                if (QueryThrows.TryGetValue(pid, out var error)) throw error;
+                if (QueryTimes.TryGetValue(pid, out long created)) return created;
+                if (Targets.TryGetValue(pid, out var target)) return target.CreationTime;
+                throw new InvalidOperationException("Creation time unavailable");
+            }
             public Action? OnSnapshot { get; set; }
             public IReadOnlyList<ProcessTreeEntry> Snapshot() { OnSnapshot?.Invoke(); return Entries.ToArray(); }
             public IProcessTreeTarget? Open(int pid)
@@ -113,6 +122,54 @@ namespace Sentinel.Tests
                 result.ExitedProcessIds.OrderBy(p => p));
             Assert.DoesNotContain(500003, result.FailedProcessIds);
             Assert.Contains(500003, result.RefusedProcessIds);
+        }
+
+        [Fact]
+        public void DeniedOlderProcessWithStaleParentPidIsNotADescendant()
+        {
+            var ops = new Operations();
+            var root = ops.Add(500001, 0, 100);
+            var child = ops.Add(500002, root.ProcessId, 110);
+            ops.Entries.Add(new ProcessTreeEntry(500003, root.ProcessId));
+            ops.OpenThrows[500003] = new System.ComponentModel.Win32Exception(5);
+            ops.QueryTimes[500003] = 50;
+            var result = new ProcessTreeTerminator(ops).Terminate(root.ProcessId);
+            Assert.True(result.Success, result.Error);
+            Assert.Contains(child.ProcessId, result.ExitedProcessIds);
+            Assert.DoesNotContain(500003, result.ExitedProcessIds);
+            Assert.DoesNotContain(500003, result.RefusedProcessIds);
+        }
+
+        [Theory]
+        [InlineData(0)]
+        [InlineData(100)]
+        [InlineData(110)]
+        public void DeniedPossibleDescendantCannotBecomeVerifiedContainment(long created)
+        {
+            var ops = new Operations();
+            var root = ops.Add(500001, 0, 100);
+            ops.Entries.Add(new ProcessTreeEntry(500002, root.ProcessId));
+            ops.OpenThrows[500002] = new System.ComponentModel.Win32Exception(5);
+            ops.QueryTimes[500002] = created;
+            var result = new ProcessTreeTerminator(ops).Terminate(root.ProcessId);
+            Assert.True(result.RootExited);
+            Assert.False(result.Success);
+            Assert.False(result.DiscoveryComplete);
+            Assert.Contains(500002, result.RefusedProcessIds);
+        }
+
+        [Fact]
+        public void DeniedIdentityQueryCannotHideUnknownDescendant()
+        {
+            var ops = new Operations();
+            var root = ops.Add(500001, 0, 100);
+            ops.Entries.Add(new ProcessTreeEntry(500002, root.ProcessId));
+            ops.OpenThrows[500002] = new System.ComponentModel.Win32Exception(5);
+            ops.QueryThrows[500002] = new System.ComponentModel.Win32Exception(5);
+            var result = new ProcessTreeTerminator(ops).Terminate(root.ProcessId);
+            Assert.True(result.RootExited);
+            Assert.False(result.Success);
+            Assert.Contains(500002, result.RefusedProcessIds);
         }
 
         [Fact]

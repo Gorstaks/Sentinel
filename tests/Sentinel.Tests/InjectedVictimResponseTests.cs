@@ -24,6 +24,8 @@ namespace Sentinel.Tests
             internal readonly Dictionary<int, Target> Targets = new();
             internal int Opens;
             public IProcessTreeTarget? Open(int pid) { Opens++; return Targets.TryGetValue(pid, out var target) ? target : null; }
+            public long QueryCreationTime(int pid) => Targets.TryGetValue(pid, out var target)
+                ? target.CreationTime : throw new InvalidOperationException("Creation time unavailable");
             public IReadOnlyList<ProcessTreeEntry> Snapshot() => new[]
             {
                 new ProcessTreeEntry(5151, 0), new ProcessTreeEntry(4242, 5151), new ProcessTreeEntry(4243, 4242)

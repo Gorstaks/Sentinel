@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.5.9] - 2026-11-02
+
+- On denied descendant termination access, query creation time with limited rights and exclude a stale parent-PID association only when the candidate demonstrably predates its alleged parent. Unknown, equal/newer, or unqueryable candidates still make containment incomplete.
+- Anchor both fresh socket-shell fixture timestamps to target creation time. Preserve native full-tree verification assertions and security-template checks; the security policy file is unchanged.
+
 ## [3.5.8] - 2026-11-02
 
 - Dispose temporary process-name lookup objects in ETW handlers. Record bounded file-walk failure samples and coverage counts in the daily audit chain without masking incomplete coverage. See the [November 2 runtime follow-up](RUNTIME_REVIEW_2026-11-02.md).

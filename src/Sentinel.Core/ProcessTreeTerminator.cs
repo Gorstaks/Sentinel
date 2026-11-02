@@ -39,6 +39,7 @@ namespace Sentinel.Core
     {
         IReadOnlyList<ProcessTreeEntry> Snapshot();
         IProcessTreeTarget? Open(int pid);
+        long QueryCreationTime(int pid);
     }
 
     /// <summary>
@@ -110,6 +111,19 @@ namespace Sentinel.Core
                             try { child = _operations.Open(entry.ProcessId); }
                             catch (Exception ex) when (ex is not OperationCanceledException)
                             {
+                                // Toolhelp parent PIDs outlive the original parent. A protected
+                                // older process may deny TERMINATE while allowing limited query.
+                                // Exclude it only with positive birth-time proof; a failed query
+                                // or a possible real descendant must still report incomplete.
+                                try
+                                {
+                                    long created = _operations.QueryCreationTime(entry.ProcessId);
+                                    if (created > 0 && created < parent.CreationTime) continue;
+                                }
+                                catch (Exception queryError) when (queryError is not OperationCanceledException)
+                                {
+                                    Debug.WriteLine($"Descendant identity unavailable for PID {entry.ProcessId}: {queryError.Message}");
+                                }
                                 result.RefusedProcessIds.Add(entry.ProcessId);
                                 result.Error ??= "One or more descendants could not be opened for containment: " + ex.Message;
                                 continue;
