@@ -20,7 +20,7 @@ Sentinel is online-capable. The Service performs bounded HTTPS hash reputation c
 [NanoAV coverage is integrated into Sentinel](docs/NANOAV.md): scanning, reputation and socket-shell behavior use Sentinel's policy/audit pipeline. The old independent executable is retired during upgrade; original source and recovery data are preserved. Single decisive Tier1 behavior responds immediately; weak hints never become kill authority merely by accumulating a score.
 
 **Platform:** Windows 10/11 x64 - .NET Framework 4.8
-**Version:** 3.5.7 (single source of truth: `version.txt`)
+**Version:** 3.5.8 (single source of truth: `version.txt`)
 
 3.4.5 integrates NanoAV coverage, fixes heuristic certificate removal, separates privacy observations from terminal behavior, and corrects inbound-only firewall policy. Approved DNS policy can reconcile automatically; IPsec/DNS/route configuration changes are monitored. See the [release scope](docs/RELEASE_3.4.5.md) and [red/blue review](docs/AUDIT_3.4.5.md).
 

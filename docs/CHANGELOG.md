@@ -1,5 +1,9 @@
 # Changelog
 
+## [3.5.8] - 2026-11-02
+
+- Dispose temporary process-name lookup objects in ETW handlers. Record bounded file-walk failure samples and coverage counts in the daily audit chain without masking incomplete coverage. See the [November 2 runtime follow-up](RUNTIME_REVIEW_2026-11-02.md).
+
 ## [3.5.7] - 2026-11-01
 
 - Report immediate authorized kill-grade Tier1 detections through silent observation without requiring a legacy chain-confirmation tag. Preserve existing Tier2 observation and destructive-response boundaries.

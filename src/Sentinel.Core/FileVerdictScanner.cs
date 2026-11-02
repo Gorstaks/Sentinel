@@ -209,7 +209,7 @@ namespace Sentinel.Core
                             retryAfter = null;
                         }
                     }
-                    string failures = string.Join("; ", _walkErrorExamples.ToArray());
+                    string failures = string.Join("; ", _walkErrorExamples.Take(3));
                     UpdateCoverageProgress(Progress, walk.IsCompleted, Volatile.Read(ref _walkDirectoryErrors),
                         "Volume " + _walkVolume + "; directories " + Interlocked.Read(ref _walkDirectories) +
                         "; evaluated " + Interlocked.Read(ref _walkFiles) + "; cached " + Interlocked.Read(ref _walkSkipped) +
@@ -239,7 +239,7 @@ namespace Sentinel.Core
         }
         private void RecordWalkFailure(string path, Exception error)
         {
-            if (Interlocked.Increment(ref _walkDirectoryErrors) <= 3)
+            if (Interlocked.Increment(ref _walkDirectoryErrors) <= 64)
                 _walkErrorExamples.Enqueue(DescribeWalkFailure(path, error));
         }
         internal static string DescribeWalkFailure(string path, Exception error)
@@ -700,7 +700,22 @@ namespace Sentinel.Core
                     _logger.LogDebug(ex, "Error initiating drive walk for {Drive}", drive.Name);
                 }
             }
-            _logger.LogInformation("[FileVerdictScanner] Lazy walk complete on all volumes.");
+            int errors = Volatile.Read(ref _walkDirectoryErrors);
+            if (_audit != null)
+                await _audit.LogEventAsync("file_scan_coverage", new
+                {
+                    Completed = !ct.IsCancellationRequested,
+                    IncompletePaths = errors,
+                    FailureExamples = _walkErrorExamples.ToArray(),
+                    FailureExamplesTruncated = errors > 64,
+                    Directories = Interlocked.Read(ref _walkDirectories),
+                    Evaluated = Interlocked.Read(ref _walkFiles),
+                    Cached = Interlocked.Read(ref _walkSkipped),
+                    LastVolume = _walkVolume,
+                    ElapsedSeconds = (DateTime.UtcNow - _walkStarted).TotalSeconds,
+                    FreshWalk = freshWalk
+                }, ct).ConfigureAwait(false);
+            _logger.LogInformation("[FileVerdictScanner] Lazy walk finished with {Errors} incomplete paths.", errors);
         }
 
         private async Task TraverseDirectoryAsync(string rootDir, CancellationToken ct, bool freshWalk)

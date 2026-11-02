@@ -188,7 +188,7 @@ namespace Sentinel.Core
 
             if (string.IsNullOrEmpty(processName))
             {
-                try { processName = Process.GetProcessById(pid).ProcessName; } catch { return; }
+                try { processName = ReadProcessName(pid); } catch { return; }
             }
 
             // Resolve parent
@@ -286,7 +286,7 @@ namespace Sentinel.Core
             }
             catch
             {
-                try { processName = Process.GetProcessById(pid).ProcessName; } catch { }
+                try { processName = ReadProcessName(pid); } catch { }
             }
 
             if (string.IsNullOrEmpty(processName)) return;
@@ -331,7 +331,7 @@ namespace Sentinel.Core
             try { processName = _ancestryCache.GetProcessInfo(pid).name; } catch { }
             if (string.IsNullOrEmpty(processName))
             {
-                try { processName = Process.GetProcessById(pid).ProcessName; } catch { return; }
+                try { processName = ReadProcessName(pid); } catch { return; }
             }
 
             WmiHostRegistryHint.Record(pid, processName);
@@ -373,7 +373,7 @@ namespace Sentinel.Core
             try { processName = _ancestryCache.GetProcessInfo(pid).name; } catch { }
             if (string.IsNullOrEmpty(processName))
             {
-                try { processName = Process.GetProcessById(pid).ProcessName; } catch { }
+                try { processName = ReadProcessName(pid); } catch { }
             }
 
             var telemetry = new DnsTelemetry
@@ -408,7 +408,7 @@ namespace Sentinel.Core
             try { processName = _ancestryCache.GetProcessInfo(callerPid).name; } catch { }
             if (string.IsNullOrEmpty(processName))
             {
-                try { processName = Process.GetProcessById(callerPid).ProcessName; } catch { }
+                try { processName = ReadProcessName(callerPid); } catch { }
             }
 
             var telemetry = new ThreatIntelTelemetry
@@ -449,7 +449,7 @@ namespace Sentinel.Core
 
             int pid = evt.ProcessId;
             string processName = "powershell.exe";
-            try { processName = Process.GetProcessById(pid).ProcessName; } catch { }
+            try { processName = ReadProcessName(pid); } catch { }
 
             // Feed as a ProcessTelemetry with the script block as the command line
             // This allows existing detection rules (ReverseShellRule, AttackToolsRule) to evaluate it
@@ -635,6 +635,14 @@ namespace Sentinel.Core
             _detectionEngine.SubmitTelemetry(context);
         }
 
+        private static string ReadProcessName(int pid)
+        {
+            // Dispose even when the process exits during the lookup. Repeated ETW
+            // lookups must not leave process resources waiting for finalization.
+            using var process = Process.GetProcessById(pid);
+            return process.ProcessName;
+        }
+
         private string ResolveEtwProcessName(int pid)
         {
             string processName = "";
@@ -642,7 +650,7 @@ namespace Sentinel.Core
             if (string.IsNullOrEmpty(processName) ||
                 processName.Equals("unknown", StringComparison.OrdinalIgnoreCase))
             {
-                try { processName = Process.GetProcessById(pid).ProcessName; } catch { }
+                try { processName = ReadProcessName(pid); } catch { }
             }
             return processName ?? "";
         }
@@ -674,7 +682,7 @@ namespace Sentinel.Core
             try
             {
                 if (pid > 4)
-                    processName = Process.GetProcessById(pid).ProcessName;
+                    processName = ReadProcessName(pid);
             }
             catch { }
 

@@ -108,6 +108,7 @@ namespace Sentinel.Tests
         [InlineData("evidence_pack_created")]
         [InlineData("incident_reporting_failed")]
         [InlineData("evidence_pack_skipped")]
+        [InlineData("file_scan_coverage")]
         public async Task ReportingOutcomesHaveDurableLedgerRecords(string type)
         {
             var directory = Path.Combine(Path.GetTempPath(), "sentinel_reporting_" + Guid.NewGuid().ToString("N"));
