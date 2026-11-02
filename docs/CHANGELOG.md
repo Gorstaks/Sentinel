@@ -1,5 +1,10 @@
 # Changelog
 
+## [3.6.0] - 2026-11-02
+
+- Remove global privilege/logon-right assignments from the shipping security template and restore all nine legacy audit category declarations to success/failure (`3`). Preserve existing host password length, complexity/history and FIPS policy instead of overriding them to zero/off.
+- Retain the security-template guard and extend it to reject weakening password/FIPS overrides. This changes future policy application; it does not reconstruct settings overwritten by older installers. Effective policy and native containment still require Windows validation.
+
 ## [3.5.9] - 2026-11-02
 
 - On denied descendant termination access, query creation time with limited rights and exclude a stale parent-PID association only when the candidate demonstrably predates its alleged parent. Unknown, equal/newer, or unqueryable candidates still make containment incomplete.

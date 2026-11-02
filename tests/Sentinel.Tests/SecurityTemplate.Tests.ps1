@@ -13,6 +13,14 @@ foreach ($raw in ($text -split '\r?\n')) {
         if ($seen.ContainsKey($identity)) { throw "Duplicate security policy assignment: $identity" }
         $seen[$identity] = $true
         if ($section -eq 'Event Audit') { $audit[$key] = $value }
+        if ($section -eq 'System Access' -and
+            $key -in @('MinimumPasswordLength','PasswordComplexity','PasswordHistorySize') -and $value -eq '0') {
+            throw "Shipping policy must not weaken existing password requirements: $key"
+        }
+        if ($section -eq 'Registry Values' -and
+            $key -eq 'MACHINE\System\CurrentControlSet\Control\Lsa\FIPSAlgorithmPolicy\Enabled' -and $value -eq '4,0') {
+            throw 'Shipping policy must not force FIPS policy off.'
+        }
     }
 }
 foreach ($key in @('AuditSystemEvents','AuditLogonEvents','AuditObjectAccess','AuditPrivilegeUse','AuditPolicyChange','AuditAccountManage','AuditProcessTracking','AuditDSAccess','AuditAccountLogon')) {

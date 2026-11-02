@@ -27,7 +27,7 @@ matching the second signal's treatment of Windows clock granularity.
 Local validation: all nine projects cross-build with zero warnings/errors; 153 selected
 portable cases pass. The actual Windows smoke failure has not been rerun here.
 
-## Independent policy failure
+## Independent policy failure in 3.5.9
 
 The security-template test was reproduced locally and still fails at its global
 privilege-rights check. The policy and that test remain unchanged at the user's request.
@@ -37,3 +37,16 @@ declarations depends on the target; this is not evidence that effective auditing
 Adjusting the test to pass without resolving or explicitly reviewing those requirements
 would hide the incompatibility. Version 3.5.9 is prepared for CI with this known policy
 failure; it is not represented as an all-green release.
+
+## Policy correction in 3.6.0
+
+With subsequent user authorization, the shipping template removes its global privilege
+and logon-right assignment block and declares success/failure auditing (`3`) for all
+nine legacy categories. Zero/off overrides for password length, complexity/history and
+FIPS policy are omitted so the template does not lower existing host settings. The
+original policy assertions remain; additional guards reject those weakening overrides.
+
+This does not reconstruct pre-installation rights or password policy on machines where
+an older template was already applied. Restore such settings from a known-good host or
+domain baseline. Effective audit policy may also depend on advanced/domain policy;
+the static template test is not proof of target-host policy read-back or containment.
