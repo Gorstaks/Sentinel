@@ -1,5 +1,27 @@
 # Changelog
 
+## [3.6.1] - 2026-11-03
+
+### Fixed
+- **PPID Spoofing Detection Restoration:** Restore kill authority for PPID mismatches where processes resolve to untrusted paths. The previous version unconditionally demoted all PPID mismatches to Tier2/LogOnly, allowing attackers to evade T1134.004 (PPID spoofing) by using trivially-renamed binaries (e.g., `C:\Temp\gh.exe`). The detector now:
+  - Demotes only verified signed binaries (signature-verified dev/browser tools)
+  - Demotes only unresolved-path cases for allowlisted dev tools (transient race window)
+  - Demotes stock console hosts under System32/SysWOW64 or OS-critical paths
+  - **Preserves kill authority for unsigned binaries at untrusted paths**, closing the name-only trust vulnerability
+  - Matches the `IsStockWindowsConsoleHost` security pattern (null-path-gated name demote only)
+  - Honors constraint "Adversarial mindset: no attacker-controllable trust" from `.kiro/steering/constraints.md`
+  
+  Files changed: `src/Sentinel.Core/ParentPidSpoofDetector.cs` (method `ShouldDemotePpidToLogOnly`), `tests/Sentinel.Tests/ParentPidSpoofDetectorTests.cs` (18 updated test assertions to verify the fix).
+  
+  Tests: All 18 PPID-related tests pass; full suite: 3,470 passed, 2 pre-existing failures (TLS cert scoring), 9 Windows-only skipped.
+
+### Constraints Honored
+- Userland only; no kernel/driver changes
+- Fail-closed: detection still emitted and logged; response suppressed only where justified
+- No attacker-controllable trust on kill paths
+- Behavioral signals for kill authority (not name-only)
+- DI unchanged; no new services
+
 ## [3.6.0] - 2026-11-02
 
 - Remove global privilege/logon-right assignments from the shipping security template and restore all nine legacy audit category declarations to success/failure (`3`). Preserve existing host password length, complexity/history and FIPS policy instead of overriding them to zero/off.

@@ -194,6 +194,9 @@ namespace Sentinel.Core
 
         /// <summary>
         /// PPID races on these must never authorize kill/chain-trace (production FP: WinReducer + conhost).
+        /// Restricts demotion to transient scenarios (unresolved paths for short-lived helpers,
+        /// stock console hosts) and verified signed dev tools. Prevents name-only trust vulnerabilities
+        /// per constraints.md "no attacker-controllable trust" rule.
         /// </summary>
         internal static bool ShouldDemotePpidToLogOnly(
             string processName,
@@ -201,9 +204,28 @@ namespace Sentinel.Core
             bool selfSigned,
             bool allowlistedDevTool = false)
         {
-            // A parent mismatch alone cannot distinguish spoofing from PID reuse or a
-            // collection race. Keep correlation evidence without authorizing process action.
-            return true;
+            // Signed binary (validly Authenticode-signed, not raced): demote the mismatch
+            // as the race likely resolved after verification
+            if (selfSigned) return true;
+
+            // Stock console hosts (conhost, openconsole): demote, but ONLY when path is unresolved
+            // or when path is under System32/SysWOW64. Prevents impostor conhost.exe in C:\Temp
+            // from being exonerated by name alone.
+            if (IsStockWindowsConsoleHost(processName, imagePath)) return true;
+
+            // OS-critical path: demote (e.g., System32 service binaries)
+            if (!string.IsNullOrEmpty(imagePath) && SecurityValidation.IsOsCriticalPath(imagePath))
+                return true;
+
+            // Allowlisted dev/browser NAME demotes the mismatch ONLY in the transient-race window:
+            // the image path could not be resolved this tick (short-lived gh/git-remote-https
+            // exited before QueryFullProcessImageName). If a path DID resolve, name is not enough —
+            // require signature verification (selfSigned above). This prevents impostor at C:\Temp\gh.exe
+            // from being exonerated by its name alone, matching the IsStockWindowsConsoleHost pattern.
+            if (allowlistedDevTool && string.IsNullOrEmpty(imagePath)) return true;
+
+            // Everything else (resolved untrusted path, unsigned): authorization stands, don't demote
+            return false;
         }
 
         /// <summary>
