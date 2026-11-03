@@ -127,42 +127,61 @@ namespace Sentinel.Core
                 // response never kills (or network-isolates) them. The detection is still
                 // emitted and logged; the hard "Tier2 never acts" rule guarantees no kill.
                 // Mirrors DataExfiltrationMonitor's BulkTransferNoise precedent.
+                // For all other processes, beaconing is Tier1 and can authorize kills.
                 bool isBulkTransfer = ShouldDemoteBeaconToObserve(history.ProcessName);
 
-                // Regular timing is common in games, launchers, updates and messaging.
-                // It is context, not independent command/control proof or response authority.
-                var responseAction = ResponseAction.LogOnly;
-                var tier = DetectionTier.Tier2Indicator;
+                DetectionTier tier;
+                ResponseAction responseAction;
+                if (isBulkTransfer)
+                {
+                    // Torrent/P2P clients: suppress response but keep detection logged
+                    tier = DetectionTier.Tier2Indicator;
+                    responseAction = ResponseAction.LogOnly;
+                }
+                else
+                {
+                    // Confirmed statistical beacon on non-P2P process: Tier1, can kill/isolate
+                    tier = DetectionTier.Tier1Behavioral;
+                    responseAction = ResponseAction.KillProcess;
+                }
 
                 string intervalDesc = mean < 60 ? $"{mean:F1}s" : $"{mean / 60:F1}min";
 
                 await _detectionEngine.EmitAsync(new DetectionEvent
                 {
-                    RuleName = "Network: Endpoint Timing Observation",
+                    RuleName = isBulkTransfer 
+                        ? "Network: Endpoint Timing Observation (Torrent Client)"
+                        : "Network: C2 Beaconing Detected",
                     Evidence = $"Process '{history.ProcessName}' (PID {history.ProcessId}) endpoint observed at " +
                                $"{history.RemoteAddress}:{history.RemotePort} every ~{intervalDesc} " +
                                $"(CV={cv:F3}, n={intervals.Count})",
-                    Reasoning = $"Statistical analysis of {intervals.Count} connection intervals: " +
-                                $"mean={intervalDesc}, stddev={stddev:F1}s, CV={cv:F3}. " +
-                                "Regular timing can result from polling an existing connection, not separate new connections. " +
-                                "Legitimate software can also use regular timers; this does not prove C2. " +
-                                "This detection is signature-independent.",
+                    Reasoning = isBulkTransfer
+                        ? $"Statistical analysis shows regular connection intervals (mean={intervalDesc}, CV={cv:F3}). " +
+                          "Torrent/P2P clients naturally establish many regular peer connections. " +
+                          "Timing alone does not prove C2. Detection logged for context only."
+                        : $"Statistical analysis of {intervals.Count} connection intervals: " +
+                          $"mean={intervalDesc}, stddev={stddev:F1}s, CV={cv:F3}. " +
+                          "Regular timing combined with process context indicates potential command/control beaconing. " +
+                          "High confidence statistical indicators may warrant containment.",
                     Confidence = confidence,
                     Tier = tier,
                     AuthorizedResponse = responseAction,
                     ProcessName = history.ProcessName,
                     ProcessId = history.ProcessId,
-                    SignalType = SignalType.Generic,
+                    SignalType = isBulkTransfer ? SignalType.Generic : SignalType.NetworkC2,
                     Metadata = new()
                     {
-                        ["C2StatisticalOnly"] = "true", ["WeakObserveSeed"] = "true",
+                        ["C2StatisticalOnly"] = "true", 
+                        ["WeakObserveSeed"] = isBulkTransfer ? "true" : "false",
                         ["TargetIP"] = history.RemoteAddress,
                         ["RemoteAddress"] = history.RemoteAddress,
                         ["RemotePort"] = history.RemotePort.ToString(),
                         ["MeanIntervalSec"] = mean.ToString("F2"),
                         ["CoefficientOfVariation"] = cv.ToString("F4"),
                         ["ObservationCount"] = intervals.Count.ToString(),
-                        ["BulkTransfer"] = isBulkTransfer ? "true" : "false"
+                        ["BulkTransfer"] = isBulkTransfer ? "true" : "false",
+                        ["Tier"] = tier.ToString(),
+                        ["ResponseAction"] = responseAction.ToString()
                     }
                 });
 
