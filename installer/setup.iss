@@ -1,16 +1,16 @@
 [Setup]
 AppName=Sentinel
-AppVersion=3.6.0
+AppVersion=3.6.1
 AppPublisher=Gorstak
 AppPublisherURL=https://gorstak.eu
 AppCopyright=Copyright (C) 2026 Gorstak
-VersionInfoVersion=3.6.0.0
+VersionInfoVersion=3.6.1.0
 VersionInfoCompany=Gorstak
 VersionInfoDescription=Sentinel Endpoint Detection and Response Setup
 VersionInfoCopyright=Copyright (C) 2026 Gorstak
 VersionInfoProductName=Sentinel EDR
-VersionInfoProductVersion=3.6.0.0
-VersionInfoOriginalFileName=SentinelSetup-3.6.0.exe
+VersionInfoProductVersion=3.6.1.0
+VersionInfoOriginalFileName=SentinelSetup-3.6.1.exe
 SourceDir=.
 DefaultDirName={autopf}\Sentinel
 DefaultGroupName=Sentinel
@@ -20,7 +20,7 @@ UninstallDisplayIcon={app}\Sentinel.ico
 Compression=lzma/max
 SolidCompression=no
 OutputDir=.
-OutputBaseFilename=SentinelSetup-3.6.0
+OutputBaseFilename=SentinelSetup-3.6.1
 PrivilegesRequired=admin
 SetupMutex=Global\SentinelSetupMutex
 UsePreviousAppDir=yes
@@ -77,8 +77,8 @@ begin
     if WizardIsTaskSelected('autorotate') then
     begin
       ResultCode := -1;
-      if (not Exec(ExpandConstant('{app}\SentinelAutoRotate.exe'), '--install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
-        MsgBox('SentinelAutoRotate was not enabled. See ProgramData\Sentinel\AutoRotate\events.log. If the log says the password was blanked, set a password with Windows tools. Sentinel itself is installed.', mbError, MB_OK);
+      if (not Exec(ExpandConstant('{app}\SentinelAutoRotate.exe'), '--install --force', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
+        MsgBox('SentinelAutoRotate was not enabled. See ProgramData\Sentinel\AutoRotate\events.log. Sentinel itself is installed.', mbError, MB_OK);
     end;
   end;
 end;

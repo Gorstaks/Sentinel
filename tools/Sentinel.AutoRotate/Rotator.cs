@@ -360,11 +360,11 @@ internal static class Rotator
     }
 
     /// <summary>--install: run from the target account's desktop as administrator.</summary>
-    public static int Install()
+    public static int Install(bool skipPolicyCheck = false)
     {
         if (!IsAdministrator())
         {
-            Log("Install refused: administrator rights are required.");
+            Rotator.Log("Install refused: administrator rights are required.");
             return 1;
         }
 
@@ -375,12 +375,13 @@ internal static class Rotator
 
         if (!string.Equals(ConsoleUserName(), account, StringComparison.OrdinalIgnoreCase))
         {
-            Log("Install refused: run setup from the desktop of the account to protect, not from another account.");
+            Rotator.Log("Install refused: run setup from the desktop of the account to protect, not from another account.");
             return 1;
         }
 
         RequireLocalEnabledAccount(account);
-        RequireBlankPolicy();
+        if (!skipPolicyCheck)
+            RequireBlankPolicy();
         EnsureStateDirectory();
 
         // Clear any earlier installation first (idempotent reinstall, or migration from an older release).

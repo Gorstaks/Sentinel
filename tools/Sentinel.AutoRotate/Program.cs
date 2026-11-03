@@ -34,6 +34,7 @@ internal static class Program
         "SentinelAutoRotate - keeps a local account password unknown by rotating it every 10 minutes.\n" +
         "Usage:\n" +
         "  SentinelAutoRotate.exe --install     Blank the account password and start rotation (administrator, target desktop).\n" +
+        "  SentinelAutoRotate.exe --install --force  Skip password-policy validation (owner override; policy will be re-checked at each password change).\n" +
         "  SentinelAutoRotate.exe --boot        Blank the password once per boot (SYSTEM, scheduled task).\n" +
         "  SentinelAutoRotate.exe --session     Rotate every ten minutes while the desktop is signed in (scheduled task).\n" +
         "  SentinelAutoRotate.exe --uninstall   Blank the password, remove tasks and earlier autologon.";
@@ -41,12 +42,13 @@ internal static class Program
     private static int Main(string[] args)
     {
         string mode = args.Length > 0 ? args[0].Trim().ToLowerInvariant() : string.Empty;
+        bool forceFlag = args.Any(a => a.Equals("--force", StringComparison.OrdinalIgnoreCase));
         try
         {
             switch (mode)
             {
                 case "--install":
-                    return Rotator.Install();
+                    return Rotator.Install(forceFlag);
                 case "--boot":
                     return Rotator.BootReset();
                 case "--session":
