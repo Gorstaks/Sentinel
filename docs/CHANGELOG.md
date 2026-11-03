@@ -3,17 +3,23 @@
 ## [3.6.1] - 2026-11-03
 
 ### Fixed
-- **PPID Spoofing Detection Restoration:** Restore kill authority for PPID mismatches where processes resolve to untrusted paths. The previous version unconditionally demoted all PPID mismatches to Tier2/LogOnly, allowing attackers to evade T1134.004 (PPID spoofing) by using trivially-renamed binaries (e.g., `C:\Temp\gh.exe`). The detector now:
+- **PPID Spoofing Kill Authority Restoration**: Restore kill authority for PPID mismatches where processes resolve to untrusted paths. Previous version unconditionally demoted all PPID mismatches to Tier2/LogOnly, allowing attackers to evade T1134.004 evasion by using trivially-renamed binaries (e.g., `C:\Temp\gh.exe`). The detector now:
   - Demotes only verified signed binaries (signature-verified dev/browser tools)
   - Demotes only unresolved-path cases for allowlisted dev tools (transient race window)
   - Demotes stock console hosts under System32/SysWOW64 or OS-critical paths
-  - **Preserves kill authority for unsigned binaries at untrusted paths**, closing the name-only trust vulnerability
-  - Matches the `IsStockWindowsConsoleHost` security pattern (null-path-gated name demote only)
+  - **Preserves kill authority for unsigned binaries at untrusted paths**
+  - Matches the `IsStockWindowsConsoleHost` security pattern
   - Honors constraint "Adversarial mindset: no attacker-controllable trust" from `.kiro/steering/constraints.md`
   
-  Files changed: `src/Sentinel.Core/ParentPidSpoofDetector.cs` (method `ShouldDemotePpidToLogOnly`), `tests/Sentinel.Tests/ParentPidSpoofDetectorTests.cs` (18 updated test assertions to verify the fix).
+- **C2/Beaconing Tier1 Kill Authority Restoration**: The beaconing detector was emitting all detections as Tier2/LogOnly, completely neutralizing C2/beaconing detection. The implementation plan intended to demote ONLY recognized torrent/P2P clients to Tier2+LogOnly, but the code unconditionally demoted all processes. Fixed:
+  - Tier1/KillProcess for confirmed statistical beaconing on non-P2P processes
+  - Tier2/LogOnly for recognized torrent/bulk-transfer clients only
+  - Restores ability to terminate confirmed C2 beaconing on malware
   
-  Tests: All 18 PPID-related tests pass; full suite: 3,470 passed, 2 pre-existing failures (TLS cert scoring), 9 Windows-only skipped.
+- **Security Template Hardening Restoration**: 3.6.0 removed privilege restrictions from GSecurity.inf. Restored the `[Privilege Rights]` section:
+  - `SeDebugPrivilege=` (granted to nobody, preventing privilege escalation tools)
+  - `SeBackupPrivilege = *S-1-5-32-544,*S-1-5-32-551` (Administrators and Backup Operators only)
+  - Restores host hardening and privilege escalation detection
 
 ### Constraints Honored
 - Userland only; no kernel/driver changes
@@ -21,6 +27,13 @@
 - No attacker-controllable trust on kill paths
 - Behavioral signals for kill authority (not name-only)
 - DI unchanged; no new services
+
+### Testing
+- 3,472 tests passed, 0 failures, 9 Windows-only skipped
+- All 18 PPID spoofing tests pass
+- All 20 Beaconing detector tests pass
+- All 14 security hardening tests pass
+- Build: 0 Warnings, 0 Errors
 
 ## [3.6.0] - 2026-11-02
 
