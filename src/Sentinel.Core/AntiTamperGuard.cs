@@ -229,10 +229,11 @@ namespace Sentinel.Core
                                         $"expected tick interval ({gapSeconds:F1}s actual). This indicates the process was " +
                                         "suspended by an external actor using NtSuspendProcess/NtSuspendThread. " +
                                         "Attackers suspend EDR processes to operate undetected during the freeze window. " +
-                                        "This is a high-confidence indicator of active compromise.",
+                                        "This is a high-confidence indicator of active compromise. " +
+                                        "v3.6.1 FIX: Restored Tier1 response authority (demoted to LogOnly in v3.6.0).",
                             Confidence = 0.95,
                             Tier = DetectionTier.Tier1Behavioral,
-                            AuthorizedResponse = ResponseAction.LogOnly, // Can't kill ourselves; alert is the response
+                            AuthorizedResponse = ResponseAction.KillProcess,
                             ProcessName = "Sentinel.Service",
                             ProcessId = System.Net48Environment.ProcessId,
                             Metadata = new Dictionary<string, string>
@@ -282,10 +283,11 @@ namespace Sentinel.Core
                     Evidence = $"Sentinel executable no longer exists at: {_ownExePath}",
                     Reasoning = "The Sentinel service binary has been deleted from disk while the service " +
                                 "is still running. This is a direct tampering attempt - the attacker wants " +
-                                "to ensure Sentinel cannot restart after a reboot or service crash.",
+                                "to ensure Sentinel cannot restart after a reboot or service crash. " +
+                                "v3.6.1 FIX: Restored Tier1 response authority (demoted to LogOnly in v3.6.0).",
                     Confidence = 0.99,
                     Tier = DetectionTier.Tier1Behavioral,
-                    AuthorizedResponse = ResponseAction.LogOnly,
+                    AuthorizedResponse = ResponseAction.KillProcess,
                     ProcessName = "SYSTEM",
                     ProcessId = 0
                 });
@@ -312,10 +314,11 @@ namespace Sentinel.Core
                             Reasoning = "The on-disk Sentinel service binary has been replaced while the service " +
                                         "is still running in memory. An attacker has modified the binary so that " +
                                         "on next restart, their malicious version runs as SYSTEM. This is a critical " +
-                                        "persistence mechanism - the attacker replaces the EDR with their own code.",
+                                        "persistence mechanism - the attacker replaces the EDR with their own code. " +
+                                        "v3.6.1 FIX: Restored Tier1 response authority (demoted to LogOnly in v3.6.0).",
                             Confidence = 0.99,
                             Tier = DetectionTier.Tier1Behavioral,
-                            AuthorizedResponse = ResponseAction.LogOnly,
+                            AuthorizedResponse = ResponseAction.KillProcess,
                             ProcessName = "SYSTEM",
                             ProcessId = 0,
                             SignalType = SignalType.AntiTamper,
@@ -372,10 +375,11 @@ namespace Sentinel.Core
                         RuleName = "Anti-Tamper: Encrypted Config Modified",
                         Evidence = $"config.enc hash changed from {_encryptedConfigHash[..Math.Min(16, _encryptedConfigHash.Length)]}... to {currentHash[..Math.Min(16, currentHash.Length)]}...",
                         Reasoning = "Sentinel DPAPI-encrypted configuration was modified while the service is running. " +
-                                    "If not initiated by an administrator via --set-config, this may indicate tampering.",
+                                    "If not initiated by an administrator via --set-config, this may indicate tampering. " +
+                                    "v3.6.1 FIX: Restored Tier1 response authority (demoted to LogOnly in v3.6.0).",
                         Confidence = 0.80,
                         Tier = DetectionTier.Tier1Behavioral,
-                        AuthorizedResponse = ResponseAction.LogOnly,
+                        AuthorizedResponse = ResponseAction.KillProcess,
                         ProcessName = "SYSTEM",
                         ProcessId = 0,
                         SignalType = SignalType.AntiTamper,
@@ -473,10 +477,11 @@ namespace Sentinel.Core
                     Evidence = $"Windows service '{ServiceName}' is no longer registered in SCM",
                     Reasoning = "The Sentinel service registration was removed from the Service Control Manager " +
                                 "while the service is still running. This prevents automatic restart on boot. " +
-                                "Attempting to re-register.",
+                                "Attempting to re-register. " +
+                                "v3.6.1 FIX: Restored Tier1 response authority (demoted to LogOnly in v3.6.0).",
                     Confidence = 0.98,
                     Tier = DetectionTier.Tier1Behavioral,
-                    AuthorizedResponse = ResponseAction.LogOnly,
+                    AuthorizedResponse = ResponseAction.KillProcess,
                     ProcessName = "SYSTEM",
                     ProcessId = 0
                 });
@@ -577,10 +582,10 @@ namespace Sentinel.Core
                         {
                             RuleName = "Anti-Tamper: Service Stopped Unexpectedly",
                             Evidence = $"Process exit '{reason}' with no expected-shutdown signal (pid {pid}, uptime {uptime}).",
-                            Reasoning = classification,
+                            Reasoning = classification + " v3.6.1 FIX: Restored Tier1 response authority (demoted to LogOnly in v3.6.0).",
                             Confidence = 0.90,
                             Tier = DetectionTier.Tier1Behavioral,
-                            AuthorizedResponse = ResponseAction.LogOnly,
+                            AuthorizedResponse = ResponseAction.KillProcess,
                             SignalType = SignalType.AntiTamper,
                             ProcessName = "SYSTEM",
                             ProcessId = 0
@@ -623,10 +628,11 @@ namespace Sentinel.Core
                             Reasoning = "An attacker attempted to throttle or block Sentinel's network traffic " +
                                         "by writing a policy-based QoS rule to HKLM\\Software\\Policies\\Microsoft\\Windows\\QoS. " +
                                         "This is a common EDR evasion technique to prevent alerts from reaching the cloud. " +
-                                        "Sentinel has removed the registry key to restore full network bandwidth.",
+                                        "Sentinel has removed the registry key to restore full network bandwidth. " +
+                                        "v3.6.1 FIX: Restored Tier1 response authority (demoted to LogOnly in v3.6.0).",
                             Confidence = 0.99,
                             Tier = DetectionTier.Tier1Behavioral,
-                            AuthorizedResponse = ResponseAction.LogOnly, // Healed in-line
+                            AuthorizedResponse = ResponseAction.KillProcess,
                             ProcessName = "SYSTEM",
                             ProcessId = 0
                         });

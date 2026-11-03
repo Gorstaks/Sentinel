@@ -147,10 +147,11 @@ namespace Sentinel.Core
                     Reasoning = "The Sentinel user-session agent keeps dying. This may indicate an attacker " +
                                 "is repeatedly terminating the agent to suppress tray notifications and prevent " +
                                 "the user from seeing active threat alerts. Could also be an AV/EDR product " +
-                                "incorrectly blocking the agent binary.",
+                                "incorrectly blocking the agent binary. " +
+                                "v3.6.1 FIX: Restored Tier1 response authority (demoted to LogOnly in v3.6.0).",
                     Confidence = _absentPolls >= KillThresholdForAlert + 2 ? 0.90 : 0.70,
                     Tier = DetectionTier.Tier1Behavioral,
-                    AuthorizedResponse = ResponseAction.LogOnly,
+                    AuthorizedResponse = ResponseAction.KillProcess,
                     ProcessName = AgentProcessName,
                     ProcessId = 0,
                     SignalType = SignalType.AntiTamper,
@@ -207,10 +208,11 @@ namespace Sentinel.Core
                                "The binary may have been replaced with a malicious copy.",
                     Reasoning = "Before relaunching the Agent process, Sentinel verifies the binary is " +
                                 "Authenticode-signed or matches the known install hash. A verification failure " +
-                                "means the agent binary was tampered with - this is a critical indicator of compromise.",
+                                "means the agent binary was tampered with - this is a critical indicator of compromise. " +
+                                "v3.6.1 FIX: Restored Tier1 response authority (demoted to LogOnly in v3.6.0).",
                     Confidence = 0.97,
                     Tier = DetectionTier.Tier1Behavioral,
-                    AuthorizedResponse = ResponseAction.LogOnly,
+                    AuthorizedResponse = ResponseAction.KillProcess,
                     ProcessName = AgentProcessName,
                     ProcessId = 0,
                     SignalType = SignalType.AntiTamper,

@@ -336,10 +336,11 @@ namespace Sentinel.Core
                                 Reasoning = "PowerShell ScriptBlock Logging was explicitly disabled via registry. " +
                                             "This is a strong anti-forensics indicator - attackers disable logging " +
                                             "before executing malicious scripts so no Event 4104 records are created. " +
-                                            "Legitimate Group Policy would not set this to 0 on a monitored system.",
+                                            "Legitimate Group Policy would not set this to 0 on a monitored system. " +
+                                            "v3.6.1 FIX: Restored Tier1 response authority (demoted to LogOnly in v3.6.0).",
                                 Confidence = 0.85,
                                 Tier = DetectionTier.Tier1Behavioral,
-                                AuthorizedResponse = ResponseAction.LogOnly,
+                                AuthorizedResponse = ResponseAction.KillProcess,
                                 ProcessName = "SYSTEM", ProcessId = 0,
                                 SignalType = SignalType.SecurityEvasion,
                             });
