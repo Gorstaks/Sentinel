@@ -1,5 +1,31 @@
 # Changelog
 
+## [3.6.2] - 2026-11-03
+
+### Fixed
+- **VBS Scheduled Task Creation Detection (cmdschedule)**: Restored detection for VBS scripts creating scheduled tasks (classic malware persistence mechanism, v2.9.0 evidence packs). Detection tracks when VBS interpreters (cscript.exe / wscript.exe) or .vbs files spawn schtasks.exe with /create or /change flags. Emitted as Tier2/LogOnly indicator (feeds behavioral correlation engine); behavioral signals cannot authorize kills alone. Metadata includes MITRE T1053.005 (Scheduled Task) and "composite_component: cmdschedule" for evidence pack correlation.
+  - Pattern 1: VBS interpreter spawns schtasks.exe
+  - Pattern 2: .vbs file triggers task creation
+  - Pattern 3: Suspicious task arguments (System scope, staged payloads, remote URLs)
+  - 14 regression tests ensure no false positives on legitimate admin automation
+  - Build: 0 Warnings, 0 Errors
+
+### Constraints Honored
+- Userland only; no kernel/driver changes
+- Fail-closed: detection still emitted and logged; response suppressed only where justified
+- No attacker-controllable trust on kill paths
+- Behavioral signals for kill authority (not name-only)
+- DI unchanged; no new services
+
+### Testing
+- 3,486 tests passed, 0 failures, 9 Windows-only skipped (14 new VbsScheduledTaskRuleTests added)
+- All 14 VbsScheduledTaskRule tests pass
+- All 18 PPID spoofing tests pass (from v3.6.1)
+- All 20 Beaconing detector tests pass (from v3.6.1)
+- All 14 security hardening tests pass (from v3.6.1)
+- SentinelAutoRotate --force tested and verified working (from v3.6.1)
+- Build: 0 Warnings, 0 Errors
+
 ## [3.6.1] - 2026-11-03
 
 ### Fixed

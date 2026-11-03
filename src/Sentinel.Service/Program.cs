@@ -468,6 +468,7 @@ namespace Sentinel.Service
                     services.AddTransient<IDetectionRule, DllSideloadingDetectionRule>();
                     services.AddTransient<IDetectionRule, ChromeRemoteDebuggingRule>();
                     services.AddTransient<IDetectionRule, DangerousBrowserFlagRule>();
+                    services.AddTransient<IDetectionRule, VbsScheduledTaskCreationRule>(); // v3.6.1: Restored cmdschedule detection
                     services.AddSingleton<IDetectionRule, DynamicRulesEvaluator>();
                     // GorstaksProtection-ported rules (v2.4.0)
                     services.AddSingleton<IDetectionRule, SlidingWindowRansomwareRule>();
