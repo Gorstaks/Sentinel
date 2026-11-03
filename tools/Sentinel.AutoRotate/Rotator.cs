@@ -226,12 +226,15 @@ internal static class Rotator
         IntPtr buffer;
         uint rc = NativeMethods.NetUserModalsGet(null, 0, out buffer);
         if (rc != NativeMethods.NERR_Success)
-            throw new InvalidOperationException("Could not read the local password policy (error " + rc + ").");
+            throw new InvalidOperationException("Could not read the local password policy (NetUserModalsGet error " + rc + "). Policy may be enforced by Group Policy; check with your administrator.");
         try
         {
             var modals = Marshal.PtrToStructure<NativeMethods.USER_MODALS_INFO_0>(buffer);
             if (modals.usrmod0_min_passwd_len > 0)
-                throw new InvalidOperationException("The effective local password policy requires a nonempty password. No change was made.");
+                throw new InvalidOperationException("The effective local password policy requires a minimum length of " + modals.usrmod0_min_passwd_len + " characters for any password. Windows does not permit blank passwords when this policy is active. " +
+                    "To use SentinelAutoRotate, your administrator must temporarily lower the minimum password length to 0 (via Local Security Policy > Account Policies > Password Policy > Minimum Password Length), " +
+                    "or you can disable AutoRotate in the Sentinel installer and run it manually later after adjusting the policy. " +
+                    "Sentinel itself (Service and Agent) are still installed and working.");
         }
         finally
         {
