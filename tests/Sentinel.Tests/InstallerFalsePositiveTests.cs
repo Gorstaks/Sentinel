@@ -102,7 +102,7 @@ namespace Sentinel.Tests
         [Theory]
         [InlineData("conhost", @"C:\Windows\System32\conhost.exe", false, true)]
         [InlineData("conhost", null, false, true)]
-        [InlineData("evil", @"C:\Temp\evil.exe", false, true)]
+        [InlineData("evil", @"C:\Temp\evil.exe", false, false)] // Unsigned at untrusted path - KILL stands (security fix 3.6.1)
         [InlineData("evil", @"C:\Temp\evil.exe", true, true)] // signed -> demote
         [InlineData("payload", @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", false, true)] // OS path
         public void ShouldDemotePpidToLogOnly_WinReducerCase(string name, string? path, bool selfSigned, bool expected)
