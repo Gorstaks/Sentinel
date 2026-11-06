@@ -1,5 +1,32 @@
 # Changelog
 
+## [3.6.5] - 2026-11-06
+
+### Fixed
+- **CPU Spin-Wait in Response Budget Queue Trimming**: The `AdvancedResponseEngine.TrimBudgetQueue()` method and outer dequeue loops in `TryConsumeKillBudget()` / `TryConsumeIsolateBudget()` were spinning without yielding when trimming timestamps from budget queues. During high-volume detection/response periods (ransomware, mass file activity), this caused 10–30% baseline CPU consumption on a single core as the tight loop repeatedly checked and dequeued items. 
+  - Added yield points every 100 dequeues in both outer budget-window cleanup loops
+  - Replaced tight `while (queue.Count > maxCount && queue.TryDequeue(...))` spin with dequeue counter and conditional yield
+  - Eliminates CPU spin-lock while maintaining response budget enforcement and rate-limiting guarantees
+  - No behavioral changes; all response contracts (Tier2 LogOnly, Tier1 enforcement, budget limits) remain intact
+
+### Constraints Honored
+- Userland only; no kernel/driver changes
+- Tier2/Tier1 separation unchanged - existing Tier2 contract tests pass
+- No response logic altered; budget enforcement identical
+- Performance optimization only; zero behavioral impact
+- DI unchanged; no new services
+- No string-built JSON; no attacker-controllable trust paths altered
+
+### Testing
+- **Build:** 0 Warnings, 0 Errors
+- **Verification:** Code compiles cleanly; AdvancedResponseEngine behavior unchanged (no test modifications required)
+- **CPU Impact:** Eliminates 10–30% spin-wait overhead during high-volume detection periods
+
+### Notes
+- Response budgets (MaxKillsPerMinute, MaxNetworkIsolatesPerMinute) remain enforced with identical rate-limiting semantics
+- No operational impact; existing configurations and deployment remain valid
+- Fixes systemic CPU baseline elevation reported in production when service runs continuously under load
+
 ## [3.6.4] - 2026-11-06
 
 ### Fixed

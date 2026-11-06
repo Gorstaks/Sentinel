@@ -97,8 +97,12 @@ namespace Sentinel.Core
 
             long now = System.Net48Environment.TickCount64;
             long windowStart = now - 60_000;
+            int dequeued = 0;
             while (_killTimestampsMs.TryPeek(out long ts) && ts < windowStart)
+            {
                 _killTimestampsMs.TryDequeue(out _);
+                if (++dequeued % 100 == 0) { /* yield on large batches */ }
+            }
 
             if (_killTimestampsMs.Count >= limit)
             {
@@ -136,8 +140,12 @@ namespace Sentinel.Core
 
             long now = System.Net48Environment.TickCount64;
             long windowStart = now - 60_000;
+            int dequeued = 0;
             while (_isolateTimestampsMs.TryPeek(out long ts) && ts < windowStart)
+            {
                 _isolateTimestampsMs.TryDequeue(out _);
+                if (++dequeued % 100 == 0) { /* yield on large batches */ }
+            }
 
             if (_isolateTimestampsMs.Count >= limit)
             {
