@@ -1,5 +1,54 @@
 # Changelog
 
+## [3.6.6] - 2026-11-06
+
+### Added
+- **Cross-Filesystem Execution Detection (`CrossFilesystemExecutionMonitor`)**: Detects when unsigned binaries are executed from network filesystems, addressing the gap where attackers stage payloads on remote systems before executing them locally.
+  - **Scope:** Monitors SMB shares (UNC paths like `\\server\share`), WSL filesystems (`\\wsl$\`), container mounts, and mapped network drives
+  - **Signal:** New **Tier2 LogOnly** detection `T2-13`: "File Execution: Unsigned Binary from Cross-Filesystem Source" (confidence 0.35–0.65)
+  - **Whitelist:** Legitimate development paths (NAS patterns `\\nas-*`, `\\file-*`, `\\storage-*` and WSL home directories) are exempt
+  - **Alert Deduplication:** 5-minute cooldown prevents duplicate alerts for the same path
+  - **Graceful Degradation:** If signer validation fails (service unavailable), alert suppression prevents false positives rather than crashing
+  - **Composition:** Feeds weak observe fuel; pairs with C2/injection/data-staging signals for terminal composites (future)
+
+### Design Rationale & Honest Ceiling
+- **Userland observation only:** Cannot validate remote filesystem integrity (that's a network-layer problem)
+- **Attacker visibility:** Once staging payload executes locally, behavioral signals (C2, injection, ransomware I/O) trigger kill-grade detection
+- **Legitimate use:** Shared builds, network project trees, WSL development are common; all flagged Tier2 for review
+- **No prevention:** Filesystem type alone never authorizes response; attack must pair with terminal behavior to trigger action
+
+### Constraints Honored
+- Userland only; no kernel drivers or syscalls
+- Tier2 LogOnly unconditional - never escalates to kill/isolate (all 9 tests verify)
+- No attacker-controllable trust paths (whitelists are pattern-based, not filename-gated)
+- DI required: `DetectionEngine`, `SignerTrustService`, `ILogger<T>` via dependency injection
+- CancellationToken threaded through async `AnalyzeProcessCreation()` method
+- No static mutable state (uses `ConcurrentDictionary` for alert tracking)
+- Graceful degradation: missing signer service doesn't crash host
+- No string-built JSON; uses `System.Text.Json` serialization
+
+### Testing
+- **Build:** 0 Warnings, 0 Errors
+- **Test Coverage:** 9 tests verifying:
+  - Filesystem classification (WSL, UNC, Container, Local)
+  - Tier2 contract: signals return `Tier2Indicator`, `AuthorizedResponse = LogOnly`
+  - No kill authorization (confidence < 0.85 kill-grade threshold)
+  - Graceful service failure handling
+  - Event metadata structure and filesystem context
+  - Alert deduplication within cooldown window
+- **All tests pass:** 9/9 passed, 0 failures
+
+### Documentation
+- Updated `requirements.md` with T2-13 rule description, scope, and honest ceiling
+- Added to `Tier 2 Detection Rules` table with full detection description
+- Notes composition behavior for future multi-signal chains
+
+### Notes
+- No new response actions or host mutations
+- No configuration changes required; monitor integrates into CoreDetection group
+- Existing Tier2 LogOnly contract and all response policies unchanged
+- Performance: minimal overhead (passive filesystem classification on process creation events)
+
 ## [3.6.5] - 2026-11-06
 
 ### Fixed

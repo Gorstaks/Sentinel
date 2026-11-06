@@ -679,4 +679,187 @@ namespace Sentinel.Core
         private static extern uint GetExtendedTcpTable(
             IntPtr pTcpTable, ref int pdwSize, bool bOrder, int ulAf, int tableClass, uint reserved);
     }
+
+    //
+    // CrossFilesystemExecutionMonitor - detects when binaries execute from network shares, WSL, or container mounts
+    //
+    public sealed class CrossFilesystemExecutionMonitor : BackgroundService
+    {
+        private readonly DetectionEngine _detectionEngine;
+        private readonly SignerTrustService _signerTrust;
+        private readonly ILogger<CrossFilesystemExecutionMonitor> _logger;
+        private readonly ConcurrentDictionary<string, DateTime> _alertedPaths = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly TimeSpan AlertCooldown = TimeSpan.FromMinutes(5);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool GetVolumePathName(string lpszFileName, StringBuilder lpszVolumePathName, uint cchBufferLength);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern uint GetDriveType(string lpRootPathName);
+
+        // Drive types
+        private const uint DRIVE_REMOVABLE = 2;
+        private const uint DRIVE_FIXED = 3;
+        private const uint DRIVE_REMOTE = 4;
+        private const uint DRIVE_CDROM = 5;
+
+        public CrossFilesystemExecutionMonitor(
+            DetectionEngine detectionEngine,
+            SignerTrustService signerTrust,
+            ILogger<CrossFilesystemExecutionMonitor> logger)
+        {
+            _detectionEngine = detectionEngine;
+            _signerTrust = signerTrust;
+            _logger = logger;
+        }
+
+        protected override async Task ExecuteAsync(CancellationToken ct)
+        {
+            _logger.LogInformation("[CrossFilesystemExecutionMonitor] Started");
+
+            while (!ct.IsCancellationRequested)
+            {
+                try
+                {
+                    // Cleanup stale alerts every 5 minutes
+                    var pruneCutoff = DateTime.UtcNow.AddMinutes(-10);
+                    foreach (var kvp in _alertedPaths.Where(x => x.Value < pruneCutoff).ToList())
+                    {
+                        _alertedPaths.TryRemove(kvp.Key, out _);
+                    }
+
+                    await Task.Delay(TimeSpan.FromSeconds(30), ct);
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex) { _logger.LogDebug(ex, "[CrossFilesystemExecutionMonitor] Cleanup error"); }
+            }
+        }
+
+        /// <summary>
+        /// Analyzes process creation from a file path. Called by the detection engine
+        /// when a new process is observed. Emits Tier2 LogOnly signals for cross-filesystem execution.
+        /// </summary>
+        public async Task AnalyzeProcessCreation(string processPath, int processId, string parentName, CancellationToken ct)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(processPath) || _alertedPaths.ContainsKey(processPath))
+                    return;
+
+                // Check if path is on a network volume or special filesystem
+                var (fsType, isRemote) = ClassifyFilesystem(processPath);
+
+                if (!isRemote)
+                    return;
+
+                // Skip known-legitimate scenarios
+                if (IsWhitelistedPath(processPath))
+                    return;
+
+                // Determine if the binary is signed
+                bool isSigned = false;
+                try
+                {
+                    var signerName = _signerTrust.GetSignerName(processPath);
+                    isSigned = !string.IsNullOrEmpty(signerName);
+                }
+                catch { /* failed to get signer */ }
+
+                // Emit Tier2 signal: unsigned binary from network source
+                if (!isSigned)
+                {
+                    _alertedPaths.TryAdd(processPath, DateTime.UtcNow);
+
+                    await _detectionEngine.EmitAsync(new DetectionEvent
+                    {
+                        RuleName = "File Execution: Unsigned Binary from Cross-Filesystem Source",
+                        Evidence = $"Process {Path.GetFileName(processPath)} (PID {processId}) executed from {fsType} path: {processPath}",
+                        Reasoning = $"An unsigned binary was executed from a {fsType} source. This is common for development, shared builds, and media, but can also indicate staging from a remote attacker-controlled system.",
+                        Confidence = 0.45,
+                        Tier = DetectionTier.Tier2Indicator,
+                        ProcessName = Path.GetFileName(processPath),
+                        ProcessId = processId,
+                        Metadata = new Dictionary<string, string>
+                        {
+                            { "FilesystemType", fsType },
+                            { "ParentProcess", parentName },
+                            { "IsSigned", isSigned.ToString() }
+                        }
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[CrossFilesystemExecutionMonitor] Error analyzing {path}", processPath);
+            }
+        }
+
+        /// <summary>
+        /// Classifies a file path's filesystem type.
+        /// Returns (filesystem type name, is remote flag)
+        /// </summary>
+        private (string Type, bool IsRemote) ClassifyFilesystem(string filePath)
+        {
+            // Check for WSL first (\\wsl$\...)
+            if (filePath.StartsWith(@"\\wsl$\", StringComparison.OrdinalIgnoreCase))
+            {
+                return ("WSL", true);
+            }
+
+            // Check for Docker/Hyper-V mount patterns
+            if (filePath.Contains(@"\docker\", StringComparison.OrdinalIgnoreCase) ||
+                filePath.Contains(@"\hyper-v\", StringComparison.OrdinalIgnoreCase))
+            {
+                return ("Container", true);
+            }
+
+            // Check for UNC path (\\server\share)
+            if (filePath.StartsWith(@"\\") && !filePath.StartsWith(@"\\?\"))
+            {
+                return ("SMB", true);
+            }
+
+            // Check if it's a mapped drive pointing to a network volume
+            try
+            {
+                var volumePath = new StringBuilder(260);
+                if (GetVolumePathName(filePath, volumePath, 260))
+                {
+                    var driveType = GetDriveType(volumePath.ToString());
+                    if (driveType == DRIVE_REMOTE)
+                    {
+                        return ("MappedNetworkDrive", true);
+                    }
+                }
+            }
+            catch { /* couldn't determine */ }
+
+            return ("Local", false);
+        }
+
+        /// <summary>
+        /// Checks if this path should be whitelisted (legitimate development/shared scenarios).
+        /// </summary>
+        private bool IsWhitelistedPath(string filePath)
+        {
+            // Whitelisted network share paths for development
+            var whitelist = new[]
+            {
+                "\\\\nas-",
+                "\\\\file-",
+                "\\\\storage-",
+                @"\\wsl$\Ubuntu\home",
+                @"\\wsl$\Debian\home"
+            };
+
+            foreach (var pattern in whitelist)
+            {
+                if (filePath.StartsWith(pattern, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            // Check if parent process is a known development tool
+            return false; // Can be extended with parent-process checks if needed
+        }
+    }
 }

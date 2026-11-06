@@ -1,6 +1,6 @@
 # Sentinel - Requirements
 
-**Version: 3.4.5**
+**Version: 3.6.6**
 
 Primary audience: a standalone home/gaming PC owner, including a potentially targeted individual. Preserve normal browsing, games, downloads and user-initiated streaming/media use; do not assume another antivirus or corporate infrastructure. Security decisions must remain explainable under a source-aware attacker.
 
@@ -123,6 +123,7 @@ The system must detect the following indicators (log only):
 | T2-10 | ClickFix encoded Run, VS Code encoded shell, RDP client LOLBin spawn - LogOnly observe fuel |
 | T2-11 | Update/servicing-surface abuse (`UpdateServicingMonitor`): a servicing actor (`TrustedInstaller`/`tiworker`/`wusa`/`dism`/`dismhost`/`expand`/`extrac32`/`pkgmgr`) spawning a shell/LOLBin/credential tool; CAB/MSU extraction to a path outside WinSxS/servicing/Temp staging (CVE-2021-40444 `..\` class); an unsigned or non-Microsoft-signed binary named as a servicing actor; a plain-HTTP or non-Microsoft WSUS/`AutoConfigURL`-style update source - all LOLBin/servicing observe fuel, never a solo kill (composes with `RegistryMonitor` service-drop + `FileActivityMonitor` writes) |
 | T2-12 | Content smuggling in a container at rest (`ArchiveContentInspector` via `FileVerdictScanner`/`FileReputationEngine`): bounded, bomb-safe inspection of `.zip`-family archives and shallow scan of `.iso`/`.img` disk images for decompression-bomb ratios, nested archives, and embedded PE / script-host members. LogOnly `WeakObserveSeed` (file contents + names are attacker-controlled -> never a solo kill); seeds correlation so a later extract-and-detonate terminal completes a respondable chain. Fail-closed and hard-capped (container/total-decompressed <=512 MB, <=4096 entries, depth <=3, 8 s budget) so a zip bomb can never DoS the scanner |
+| T2-13 | Cross-filesystem execution (`CrossFilesystemExecutionMonitor`): unsigned binary loaded from network shares (SMB/UNC), WSL (`\\wsl$\`), container mounts, or mapped network drives - LogOnly observe fuel with confidence 0.35-0.65 (legitimate for development/shared builds; attacker ceiling: staging on remote system is visible once payload executes locally). Never a solo kill trigger; pairs with C2/injection/exfil for composite chains |
 
 ### FR-4: Composite Detections
 

@@ -1,6 +1,6 @@
 # Sentinel - Constraints
 
-**Version: 3.6.4**
+**Version: 3.6.6**
 
 3.4.5 scope, explicitly authorized by the owner: Sentinel is online-capable; the Service may perform fixed HTTPS hash-only reputation requests. Inbound-only image rules cover Service/Guard and Agent; old outbound self-blocks are removed. Outbound threat reporting remains removed. NanoAV coverage follows Sentinel policy; its archived independent engine is no longer packaged or executed. An exact current malware-feed match may authorize the separately compiled, audited, bounded pinned-file containment policy, never a process kill or a Tier2 response. See [integration limits](NANOAV.md).
 
