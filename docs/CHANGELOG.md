@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.6.3] - 2026-11-06
+
+### Fixed
+- **FileVerdictScanner CPU spike from restart loop**: Repeated watcher coverage losses triggered back-to-back full volume walks of `C:\`, pinning the service CPU at ~90% and inflating RAM to ~1.4 GB with 556 threads. Root cause: `ExecuteAsync` caught `WatcherCoverageLostException` and always restarted after a flat 5-second delay, forcing a fresh `WalkDrivesAsync` on every iteration regardless of how quickly the previous run failed.
+  - Added exponential back-off to coverage rebuild delays: 5 s → 10 s → 20 s → … capped at 10 minutes.
+  - The delay counter resets to 5 s after a coverage run that lasted ≥ 10 minutes, so brief transient overflows remain fast to recover while a persistent fault storm no longer hammers the drive.
+  - Reconciliation walks still run after every rebuild; no missed-event coverage is sacrificed.
+  - `CoverageRestartDelay` is an `internal static` method, directly unit-testable.
+
+### Constraints Honored
+- Userland only; no kernel/driver changes
+- Fail-closed: reconciliation walk still runs after every watcher fault; no coverage gap introduced
+- No attacker-controllable trust paths altered
+- DI unchanged; no new services
+
+### Testing
+- Build: 0 Warnings, 0 Errors
+
 ## [3.6.2] - 2026-11-03
 
 ### Fixed
