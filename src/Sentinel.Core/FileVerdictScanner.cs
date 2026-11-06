@@ -99,16 +99,37 @@ namespace Sentinel.Core
             _logger = logger;
         }
 
+        // A coverage run that lasts at least this long is treated as healthy; restart delays reset after it.
+        private static readonly TimeSpan CoverageHealthyRunThreshold = TimeSpan.FromMinutes(10);
+        // Upper bound on the delay between coverage rebuilds during a fault storm.
+        private static readonly TimeSpan MaxCoverageRestartDelay = TimeSpan.FromMinutes(10);
+
+        // Each rebuild forces a full content walk of every fixed volume. Repeated watcher
+        // overflows therefore back off exponentially (5 s, 10 s, 20 s, ... capped) so the
+        // walk cannot run back to back and pin the CPU.
+        internal static TimeSpan CoverageRestartDelay(int consecutiveLosses)
+        {
+            int exponent = Math.Min(Math.Max(consecutiveLosses - 1, 0), 10);
+            double seconds = Math.Min(5 * Math.Pow(2, exponent), MaxCoverageRestartDelay.TotalSeconds);
+            return TimeSpan.FromSeconds(seconds);
+        }
+
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            int consecutiveCoverageLosses = 0;
             while (!stoppingToken.IsCancellationRequested)
             {
+                var runStarted = DateTime.UtcNow;
                 try { await RunVolumeCoverageAsync(stoppingToken).ConfigureAwait(false); }
                 catch (WatcherCoverageLostException)
                 {
+                    consecutiveCoverageLosses = DateTime.UtcNow - runStarted >= CoverageHealthyRunThreshold
+                        ? 1
+                        : consecutiveCoverageLosses + 1;
                     _requiresFreshWalk = true;
-                    _logger.LogWarning("[FileVerdictScanner] Rebuilding failed subscriptions and reconciling missed file content; coverage remains degraded during the walk.");
-                    await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken).ConfigureAwait(false);
+                    var delay = CoverageRestartDelay(consecutiveCoverageLosses);
+                    _logger.LogWarning("[FileVerdictScanner] Rebuilding failed subscriptions and reconciling missed file content in {Delay}s; coverage remains degraded during the walk.", (int)delay.TotalSeconds);
+                    await Task.Delay(delay, stoppingToken).ConfigureAwait(false);
                 }
                 catch (VolumeCoverageChangedException)
                 {
