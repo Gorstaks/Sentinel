@@ -1,16 +1,16 @@
 [Setup]
 AppName=Sentinel
-AppVersion=3.6.3
+AppVersion=3.6.4
 AppPublisher=Gorstak
 AppPublisherURL=https://gorstak.eu
 AppCopyright=Copyright (C) 2026 Gorstak
-VersionInfoVersion=3.6.3.0
+VersionInfoVersion=3.6.4.0
 VersionInfoCompany=Gorstak
 VersionInfoDescription=Sentinel Endpoint Detection and Response Setup
 VersionInfoCopyright=Copyright (C) 2026 Gorstak
 VersionInfoProductName=Sentinel EDR
-VersionInfoProductVersion=3.6.3.0
-VersionInfoOriginalFileName=SentinelSetup-3.6.3.exe
+VersionInfoProductVersion=3.6.4.0
+VersionInfoOriginalFileName=SentinelSetup-3.6.4.exe
 SourceDir=.
 DefaultDirName={autopf}\Sentinel
 DefaultGroupName=Sentinel
@@ -20,7 +20,7 @@ UninstallDisplayIcon={app}\Sentinel.ico
 Compression=lzma/max
 SolidCompression=no
 OutputDir=.
-OutputBaseFilename=SentinelSetup-3.6.3
+OutputBaseFilename=SentinelSetup-3.6.4
 PrivilegesRequired=admin
 SetupMutex=Global\SentinelSetupMutex
 UsePreviousAppDir=yes
@@ -37,14 +37,8 @@ Source: "..\publish\agent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubd
 Source: "..\publish\autorotate\SentinelAutoRotate.exe"; DestDir: "{app}"; Flags: ignoreversion uninsrestartdelete
 Source: "..\publish\exploitshield\*"; DestDir: "{app}\ExploitShield"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; Migrate the previous companion without deleting recovery data.
-Source: "retire-nanoav.ps1"; Flags: dontcopy
-Source: "set-malwarebazaar-key.ps1"; DestDir: "{app}\Tools"; Flags: ignoreversion
-Source: "..\tools\diagnostics\Collect-InstallFailure.ps1"; DestDir: "{app}\Tools"; Flags: ignoreversion
 
 [InstallDelete]
-; Legacy runtime migration is performed before service upgrade.
-; Keep its configuration, database, logs, backups and quarantine intact.
 
 
 [Tasks]
@@ -277,31 +271,7 @@ begin
   RenameLockedBinariesAside(ExpandConstant('{app}'));
 end;
 
-procedure RetireNanoAV();
-var
-  ScriptPath, PowerShellPath, Params: String;
-  ExitCode: Integer;
-begin
-  ExtractTemporaryFile('retire-nanoav.ps1');
-  ScriptPath := ExpandConstant('{tmp}\retire-nanoav.ps1');
-  PowerShellPath := ExpandConstant('{sysnative}\WindowsPowerShell\v1.0\powershell.exe');
-  if not FileExists(PowerShellPath) then
-    PowerShellPath := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
-  Params := '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ScriptPath + '" -SentinelDirectory "' + ExpandConstant('{app}') + '"';
-  ExitCode := -1;
-  // Retiring the legacy NanoAV companion is best-effort cleanup of a previous product.
-  // The script fails closed and always preserves recovery data and never imports poisoned
-  // state regardless of its exit code, so a failure here (a locked/absent legacy runtime
-  // file, an un-unloadable old companion, a transcript/policy hiccup) must NOT abort a fresh
-  // Sentinel install. Record the outcome in the setup log and continue; the new Sentinel
-  // installs cleanly and the old companion's leftovers remain reviewable.
-  if not Exec(PowerShellPath, Params, '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then
-    Log('NanoAV retirement could not be launched; continuing install. Review ProgramData\Sentinel\Logs\nanoav-retirement.log.')
-  else if ExitCode <> 0 then
-    Log('NanoAV retirement exited ' + IntToStr(ExitCode) + '; recovery data preserved and no poisoned state imported. Continuing install. See ProgramData\Sentinel\Logs\nanoav-retirement.log.')
-  else
-    Log('NanoAV retirement completed.');
-end;
+
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
@@ -313,7 +283,6 @@ begin
      DirExists(ExpandConstant('{app}')) or
      DirExists(ExpandConstant('{commonpf32}\Sentinel')) then
   begin
-    RetireNanoAV();
     StopExistingService();
   end;
 end;

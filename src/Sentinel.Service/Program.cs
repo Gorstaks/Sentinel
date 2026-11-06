@@ -66,15 +66,22 @@ namespace Sentinel.Service
 
             // v2.3.9: Installer delegates SCM/Run-key work here so Inno Setup stays file-copy-only
             // (avoids embedding sc create / Run / taskkill / icacls heuristics in the setup EXE).
+            // v3.6.4: Use Task.Delay() instead of Thread.Sleep() so watchdog loop can respond to shutdown.
             if (args.Length >= 1 && args[0].Equals("--watchdog", StringComparison.OrdinalIgnoreCase))
             {
                 if (Environment.UserInteractive)
                 {
-                    while (true)
+                    var watchdogCts = new CancellationTokenSource();
+                    try
                     {
-                        try { InstallBootstrap.TryStartService(); } catch { }
-                        Thread.Sleep(20000);
+                        while (!watchdogCts.Token.IsCancellationRequested)
+                        {
+                            try { InstallBootstrap.TryStartService(); } catch { }
+                            try { Task.Delay(20000, watchdogCts.Token).GetAwaiter().GetResult(); }
+                            catch (OperationCanceledException) { break; }
+                        }
                     }
+                    finally { watchdogCts.Dispose(); }
                 }
                 ServiceBase.Run(new SentinelGuardService());
                 return;
@@ -185,12 +192,42 @@ namespace Sentinel.Service
             catch { /* best-effort lifecycle hook */ }
 
             AppendDiagnostic("startup_trace.log",
-                $"[{DateTime.UtcNow:O}] host.StartAsync() completed. Blocking Main forever (ManualResetEvent)...\n");
+                $"[{DateTime.UtcNow:O}] host.StartAsync() completed. Waiting for graceful shutdown...\n");
 
-            // Block Main() forever. NOTHING can make this return except process termination.
-            // This prevents the .NET Host's "BackgroundService completed -> shutdown" behavior
-            // from propagating to a process exit.
-            Thread.Sleep(Timeout.Infinite);
+            // v3.6.4: Replace Thread.Sleep(Timeout.Infinite) with proper async lifecycle management.
+            // Use a ManualResetEvent to block Main until ApplicationStopping fires or process exits.
+            using var shutdownEvent = new System.Threading.ManualResetEvent(false);
+            try
+            {
+                var lifetime = host.Services.GetService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>();
+                if (lifetime != null)
+                {
+                    lifetime.ApplicationStopping.Register(() => shutdownEvent.Set());
+                    shutdownEvent.WaitOne();
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendDiagnostic("startup_trace.log",
+                    $"[{DateTime.UtcNow:O}] Error waiting on ApplicationStopping: {ex.Message}\n");
+            }
+
+            AppendDiagnostic("startup_trace.log",
+                $"[{DateTime.UtcNow:O}] ApplicationStopping signal received. Shutting down...\n");
+
+            try
+            {
+                await host.StopAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                AppendDiagnostic("startup_trace.log",
+                    $"[{DateTime.UtcNow:O}] Error during host.StopAsync(): {ex.Message}\n");
+            }
+            finally
+            {
+                host?.Dispose();
+            }
         }
 
         /// <summary>

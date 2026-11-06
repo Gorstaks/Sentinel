@@ -676,16 +676,15 @@ namespace Sentinel.Agent
                     try
                     {
                         var json = File.ReadAllText(metricsFile);
-                        // Wrap in {ok, ops} envelope to match IPC response format
-                        var wrapped = $"{{\"ok\":true,\"ops\":{json}}}";
-                        response.ContentType = "application/json";
-                        var buffer = Encoding.UTF8.GetBytes(wrapped);
-                        response.ContentLength64 = buffer.Length;
-                        await response.OutputStream.WriteAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
-                        response.Close();
+                        // v3.6.4: Parse and reserialize ops_metrics.json via System.Text.Json (no string interpolation)
+                        // to prevent injection if metrics file is corrupted or contains JSON control characters.
+                        using var doc = System.Text.Json.JsonDocument.Parse(json);
+                        var wrapped = new { ok = true, ops = doc.RootElement };
+                        await WriteJson(response, wrapped).ConfigureAwait(false);
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        _logger.LogWarning(ex, "[WebDashboard] Failed to read or parse ops_metrics.json");
                         await WriteJson(response, new { ok = false, error = "metrics_unavailable" }).ConfigureAwait(false);
                     }
                 }

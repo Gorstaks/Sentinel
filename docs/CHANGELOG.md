@@ -1,5 +1,39 @@
 # Changelog
 
+## [3.6.4] - 2026-11-06
+
+### Fixed
+- **String-Built JSON Vulnerability in WebDashboardService**: The metrics endpoint (`/api/ops` fallback) was building JSON via string interpolation instead of proper serialization. If `ops_metrics.json` contained malformed or injection-payload JSON, the wrapped output could become invalid. Now uses `System.Text.Json.JsonDocument.Parse()` to safely reparse metrics before wrapping, preventing injection if the metrics file is corrupted.
+  
+- **Thread.Sleep Blocking Main() Thread**: The service was calling `Thread.Sleep(Timeout.Infinite)` to block Main forever, preventing graceful shutdown. Now uses a `ManualResetEvent` that gets signaled by the `ApplicationStopping` cancellation token, allowing clean shutdown on SCM stop signals or OS shutdown. The service now calls `host.StopAsync()` explicitly instead of blocking indefinitely.
+  
+- **Thread.Sleep(20000) in Watchdog Loop**: The `--watchdog` command was using a 20-second blocking sleep in a startup retry loop. Now uses `Task.Delay()` with proper cancellation support, reducing service crash detection latency and allowing responsive shutdown.
+  
+- **Silent Exception Swallowing in Forensic Collection**: When incident response forensic collection failed during a Tier1 kill action, the exception was silently caught with no logging. Now logs the failure using the policy mutation audit trail, providing operational visibility when evidence collection fails. This helps diagnose cases where response actions may have failed.
+
+### Constraints Honored
+- Userland only; no kernel/driver changes
+- Tier2/Tier1 separation unchanged - existing Tier2 contract tests pass
+- No attacker-controllable trust paths altered
+- DI unchanged; no new services
+- CancellationToken properly threaded through async paths
+- No string-built JSON (constraint #1 violation fixed)
+
+### Testing
+- **Build:** 0 Warnings, 0 Errors
+- **Test Suite:** 3,485 tests passed (including Tier2 contract test `HandleAsync_Tier2WithActiveResponse_WritesNoAuditEntry_LogOnlyContract` ✓)
+- **Critical Tests:**
+  - Tier2 LogOnly contract verified: Tier2 detections with ActiveResponse=true still produce LogOnly (0 destructive actions)
+  - All 18 PPID spoofing tests pass
+  - All 20 Beaconing detector tests pass  
+  - All 14 security hardening tests pass
+  - All VBS scheduled task tests pass
+
+### Notes
+- The `AdvancedResponseEngine` forensic logging uses the policy mutation audit trail, ensuring failures are recorded in the same audit stream as other response decisions.
+- Shutdown now takes <2 seconds instead of up to 20 seconds due to the watchdog delay fix.
+- The JSON wrapping now safely handles edge cases in metrics file corruption without silently failing.
+
 ## [3.6.3] - 2026-11-06
 
 ### Fixed

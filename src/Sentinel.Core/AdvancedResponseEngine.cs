@@ -1089,7 +1089,27 @@ namespace Sentinel.Core
                 }
 
                 // Collect forensic evidence before killing
-                try { if (_incidentResponse != null && !ResponsePolicy.IsDirectSocketShell(detection)) _ = _incidentResponse.CollectEvidenceAsync(detection); } catch { }
+                // v3.6.4: Add logging on forensic collection failure
+                try 
+                { 
+                    if (_incidentResponse != null && !ResponsePolicy.IsDirectSocketShell(detection)) 
+                        _ = _incidentResponse.CollectEvidenceAsync(detection); 
+                } 
+                catch (Exception ex)
+                {
+                    try
+                    {
+                        await _eventLogger.TryLogPolicyMutationAsync(new 
+                        { 
+                            AuditType = "FORENSIC_COLLECTION_FAILED",
+                            Timestamp = DateTime.UtcNow, 
+                            detection.RuleName, 
+                            detection.ProcessId,
+                            ErrorMessage = ex.Message
+                        }, default).ConfigureAwait(false);
+                    }
+                    catch { /* best-effort logging */ }
+                }
 
                 var reasonText = $"Triggered by rule: {detection.RuleName}. {reason}{isolationContainmentNote}";
                 if (victimScoped)
