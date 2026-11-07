@@ -78,7 +78,7 @@ namespace Sentinel.Tests
             Assert.NotNull(composite);
             Assert.Equal("Network Tamper: Local MitM Chain", composite!.RuleName);
             Assert.Equal(DetectionTier.Tier1Behavioral, composite.Tier);
-            Assert.Equal(ResponseAction.VpnShieldUp, composite.AuthorizedResponse);
+            Assert.Equal(ResponseAction.LogOnly, composite.AuthorizedResponse);
         }
 
         [Fact]
@@ -92,7 +92,7 @@ namespace Sentinel.Tests
             await engine.RegisterSignalAsync(ArpSpoofSignal());
 
             Assert.NotNull(composite);
-            Assert.Equal(ResponseAction.VpnShieldUp, composite!.AuthorizedResponse);
+            Assert.Equal(ResponseAction.LogOnly, composite!.AuthorizedResponse);
         }
 
         [Fact]
@@ -179,7 +179,7 @@ namespace Sentinel.Tests
             });
 
             Assert.NotNull(composite);
-            Assert.Equal(ResponseAction.VpnShieldUp, composite!.AuthorizedResponse);
+            Assert.Equal(ResponseAction.LogOnly, composite!.AuthorizedResponse);
         }
 
         [Fact]
@@ -193,7 +193,7 @@ namespace Sentinel.Tests
             await engine.RegisterSignalAsync(ArpSpoofSignal());
 
             Assert.NotNull(composite);
-            Assert.Equal(ResponseAction.VpnShieldUp, composite!.AuthorizedResponse);
+            Assert.Equal(ResponseAction.LogOnly, composite!.AuthorizedResponse);
         }
 
         [Fact]
@@ -218,6 +218,69 @@ namespace Sentinel.Tests
             await engine.RegisterSignalAsync(AdditionalGatewaySignal());
 
             Assert.Null(composite);
+        }
+
+        // VPN coexistence: a VPN client connecting after startup produces a new tunnel adapter
+        // plus that tunnel's gateway/route. Those are host-side paths, not LAN MitM legs.
+
+        private static DetectionEvent AsTunnel(DetectionEvent signal)
+        {
+            VpnTunnelClassifier.MarkTunnel(signal.Metadata);
+            return signal;
+        }
+
+        [Fact]
+        public async Task VpnConnect_TunnelAdapterPlusTunnelGateway_DoesNotRaiseComposite()
+        {
+            DetectionEvent? composite = null;
+            var engine = new BehavioralCorrelationEngine();
+            engine.Initialize(ev => { composite = ev; return Task.CompletedTask; });
+
+            await engine.RegisterSignalAsync(AsTunnel(NewAdapterSignal(index: 42)));
+            await engine.RegisterSignalAsync(AsTunnel(AdditionalGatewaySignal("{TAP}")));
+            await engine.RegisterSignalAsync(AsTunnel(NewRouteSignal("00000000:00000080:0A000001:42")));
+
+            Assert.Null(composite);
+        }
+
+        [Fact]
+        public async Task TunnelAdapter_DoesNotPairWithRealLanTamper()
+        {
+            DetectionEvent? composite = null;
+            var engine = new BehavioralCorrelationEngine();
+            engine.Initialize(ev => { composite = ev; return Task.CompletedTask; });
+
+            // A VPN adapter is not a second LAN leg, so one ARP spoof stays a single vector.
+            await engine.RegisterSignalAsync(AsTunnel(NewAdapterSignal(index: 42)));
+            await engine.RegisterSignalAsync(ArpSpoofSignal());
+
+            Assert.Null(composite);
+        }
+
+        [Fact]
+        public async Task RealLanTamper_StillFires_WhileVpnIsUp()
+        {
+            DetectionEvent? composite = null;
+            var engine = new BehavioralCorrelationEngine();
+            engine.Initialize(ev => { composite = ev; return Task.CompletedTask; });
+
+            await engine.RegisterSignalAsync(AsTunnel(NewAdapterSignal(index: 42)));
+            await engine.RegisterSignalAsync(NewAdapterSignal(index: 77)); // rogue USB NIC
+            await engine.RegisterSignalAsync(ArpSpoofSignal());
+
+            Assert.NotNull(composite);
+            Assert.Equal("Network Tamper: Local MitM Chain", composite!.RuleName);
+            Assert.Equal(ResponseAction.LogOnly, composite.AuthorizedResponse);
+        }
+
+        [Fact]
+        public void TunnelMarker_IsIgnored_OnProcessAttributedSignals()
+        {
+            // Only host-wide monitor events (PID 0-4) may carry the tunnel exemption.
+            var signal = AsTunnel(NewAdapterSignal());
+            signal.ProcessId = 4321;
+            Assert.False(VpnTunnelClassifier.IsTunnelObservation(signal));
+            Assert.True(VpnTunnelClassifier.IsTunnelObservation(AsTunnel(NewAdapterSignal())));
         }
     }
 }

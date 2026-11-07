@@ -96,7 +96,7 @@ The system must detect the following behavioral threats:
 | T1-21 | Package supply-chain runtime | Package managers spawning LOLBins; executables under package trees; AI agent config poison (CLAUDE.md, .cursorrules, MCP configs) |
 | T1-22 | Indirect syscall / Hell's Gate | Non-image executable memory containing a well-formed stub table: `mov r10,rcx; mov eax,SSN; syscall; ret` or a copied ntdll SharedUserData prologue, with 3+ distinct SSNs (loose JIT `0F 05` bytes are not a hit) |
 | T1-23 | MitM attack chain | Explicit-thumbprint-authorized root removal only; ghost process -> rogue Cast kill, FCM Send-Tab-to-Self block, rogue Cast firewall block (when `MitmDefense.Enabled`) |
-| T1-31 | Local network path MitM (v2.6.0) | >=2 distinct local-network tamper vectors (ARP poisoning, DNS hijack, route injection, adapter bridging, rogue WPAD/PAC proxy, Wi-Fi deauth flood / evil-twin BSSID) within the correlation window -> `Network Tamper: Local MitM Chain` composite -> protective VPN shield (when `VpnShield.Enabled`): raise tunnel, clean path, verify clean, drop. Fail-safe holds tunnel until verified clean |
+| T1-31 | Local network path MitM (v2.6.0) | >=2 distinct local-network tamper vectors (ARP poisoning, DNS hijack, route injection, adapter bridging, rogue WPAD/PAC proxy, Wi-Fi deauth flood / evil-twin BSSID) within the correlation window -> `Network Tamper: Local MitM Chain` composite: confirmed Tier1 report, LogOnly (3.6.8: VPN shield retired; VPN/overlay tunnel observations never count as legs - see FR-21) |
 | T1-24 | Lazarus Dream Job (CVE-2026-68820 campaign) | SecurityPDF / FudModule names, libmupdf sideload in staging, Temp\\new.exe from PDF parent, published C2; does **not** patch afd.sys |
 | T1-25 | LegacyHive (CVE-2026-62832) | Another user's HKU hive loaded while not logged on; hive-path reparse; custom HKU names |
 | T1-26 | Cloud Files / ShieldBreak (CVE-2026-62713) | Unknown CfApi sync roots; Cloud Files placeholders in staging; OneDrive exempt |
@@ -200,7 +200,7 @@ The system must implement two correlation engines that fire composite detections
 | RemoveCert / RemoveCertAndKillAdder | Planted / high-confidence rogue certificates |
 | RemoveRegistryEntry | Malicious autorun / service / COM persistence |
 | DismountVolume (wired v2.8.4) | Authorized Tier1 kill whose process runs from a mounted ISO -> `IsolationResponseEngine.HandleIsoThreatAsync`: kill process tree, `Dismount-DiskImage`, delete backing `.iso`. ISO origin resolved from non-attacker-controllable anchors (OS-recorded mounted-image + process image path); degrades to plain kill (never dismounts an unrelated volume) if origin unconfirmed. Also drives Docker (`HandleDockerThreatAsync`, via `ContainerId`) and VM (`HandleVmThreatAsync`, via VM host PID) containment alongside the kill. VHD/SUBST fallback drives are dismounted by `VolumeMountMonitor` |
-| VpnShieldUp (v2.6.0) | Confirmed local network tamper: raise a userland RAS VPN tunnel (visible; no kernel), clean the path (unbridge / re-enable adapters; DNS requires explicit administrator repair), verify clean, then drop the tunnel. Fail-safe: hold tunnel if not verified clean. Non-kill (ordered below KillProcess). Gated on `VpnShield.Enabled` (`ProductPosture.AllowsVpnShield`, default off); prefers trusted `ProviderProfile`, VPN Gate fallback only if opted in |
+| VpnShieldUp (retired 3.6.8) | No longer executed. `[Obsolete]` slot kept so serialized enum numbers stay stable; treated as LogOnly. VPN tunnels belong to separate VPN clients (GVPN) |
 
 **ActiveResponse model:**
 
@@ -336,27 +336,38 @@ The user-session Agent must provide a Settings window (tray menu + double-click)
 - On net48, chain-shape enrichment that could trigger AIA downloads is omitted. Signature verification uses cached URL data; the guard does not fetch certificate material.
 - CurrentUser stores refer to the service's security context; do not infer inventory of every logged-on user's certificate store.
 
-### FR-21: Protective VPN-shield remediation (v2.6.0)
+### FR-21: Local network tamper report and VPN coexistence (v2.6.0, revised 3.6.8)
 
-- `Sentinel:VpnShield` opt-in remediation for confirmed local network tampering (path-level MitM)
-- Default `Enabled: false` on clean installs (`ProductPosture.AllowsVpnShield` gate)
-- Trigger: the `Network Tamper: Local MitM Chain` composite fires when **>= 2 distinct** local-network
-  tamper vectors (`ARP`, `DNS`, `Route`, `Bridge`, `AdapterDown`, `WPAD`, `WiFiDeauth`, `WiFiEvilTwin`)
-  occur within the correlation window. A single vector never self-confirms; WPAD (a `WeakObserveSeed`)
-  also continues to feed the existing `WPAD Proxy Hijack Chain`
-- Action (`ResponseAction.VpnShieldUp`, non-kill, ordered below `KillProcess`): `VpnShieldEngine` raises
-  a userland RAS VPN tunnel (`rasapi32`, visible - no kernel driver, no self-hiding), asks
-  `NetworkInterfaceGuard` to clean (unbridge / re-enable adapters; DNS requires explicit administrator repair), verifies the path is
-  clean for `CleanSweepsRequired` consecutive sweeps, then drops the tunnel
-- **Fail-safe:** if the path cannot be *verified* clean (or verification errors), the tunnel STAYS UP;
-  on `MaxShieldSeconds` expiry the incident is escalated and the tunnel is held - never silently dropped
-- Trusted `ProviderProfile` (paid Proton/Mullvad or corporate RAS entry) is preferred; VPN Gate public
-  relays are a fallback only when `UseVpnGateFallback` is set and no trusted profile exists, and the
-  incident log records the volunteer-relay tradeoff
-- Chain confirmation must never rewrite a `VpnShieldUp` action into a process nuke; process-level
-  threats (C2, DoH exfil, covert mesh/webhook) are still answered with kill/isolate, not a tunnel
-- Config fields: `Enabled`, `ProviderProfile`, `UseVpnGateFallback`, `VpnGateEntryName`,
-  `VerifyIntervalSeconds`, `CleanSweepsRequired`, `MaxShieldSeconds`
+- **3.6.8: the VPN shield is retired.** Sentinel no longer raises, bundles or installs a VPN. GVPN is a
+  separate project with its own installer; any VPN client may run next to Sentinel. `VpnShieldEngine`,
+  `VpnShieldConfig` and `ProductPosture.AllowsVpnShield` are removed; a stale `VpnShield` key in an older
+  `config.enc` is ignored. `ResponseAction.VpnShieldUp` is kept only as an `[Obsolete]` numeric slot so
+  serialized enum values (events.jsonl, audit, replay) stay stable; nothing emits it and the response
+  engine treats it as LogOnly
+- Trigger (unchanged): the `Network Tamper: Local MitM Chain` composite fires when **>= 2 distinct**
+  local-network tamper vectors (`ARP`, `DNS`, `Route`, `Gateway`, `NewAdapter`, `Bridge`, `AdapterDown`,
+  `WPAD`, `WiFiDeauth`, `WiFiEvilTwin`) resting on independent observations occur within the
+  correlation window. A single vector never self-confirms; WPAD also feeds `WPAD Proxy Hijack Chain`
+- The composite is a confirmed Tier1 **report** authored `LogOnly` with
+  `TerminalOutcome = NetworkTamper`. `ResponsePolicy.IsReportOnlyNetworkTamper` keeps it LogOnly through
+  `EnforceDispatchPolicy`, `ApplyTierLaw` and `PromoteChainConfirmedFields` (PID 0-4 only, so a
+  process-attributed detection cannot use the tag to shed its response). Process-level threats (C2,
+  DoH exfil, covert mesh/webhook) are still answered with kill/isolate
+- **VPN coexistence** (`VpnTunnelClassifier`): VPN/overlay tunnel interfaces are identified by IANA
+  interface type (PPP 23, PROP_VIRTUAL 53, TUNNEL 131) or the driver-supplied description - never the
+  user-renamable connection name; Wi-Fi is never classified by description; Teredo/ISATAP/6to4/IP-HTTPS
+  are not VPNs. For tunnel interfaces:
+  - `RouteTableMonitor` does not take the Tier1 isolate path for tunnel routes; a full-traffic route
+    (0/0 or 0/1 + 128/1) is recorded as Tier2 `VPN Tunnel: Full-Traffic Route Installed`. The LAN
+    gateway and per-adapter gateways exclude tunnels
+  - `ArpSpoofMonitor` baselines the LAN gateway, not a tunnel peer
+  - `NetworkInterfaceGuard` records a new tunnel adapter but tags it
+  - `TrafficVolumeBaseline` counts non-tunnel adapters only (no double counting)
+  - Tagged observations (`TunnelAdapter=true`, PID 0-4 only) are never LAN MitM legs
+- `VpnTunnelLeakMonitor` (NetworkIntegrity, 20 s, observe-only Tier2/LogOnly, no mutation): reports
+  tunnel connected/disconnected, public IPv4 routed outside the tunnel, physical IPv6 path with an
+  IPv4-only tunnel, and resolvers left on physical adapters while a full tunnel brings its own. Uses OS
+  state only, never a VPN client's user-writable log
 
 ### FR-19: Settings dashboard (v2.2.2)
 

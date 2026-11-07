@@ -45,13 +45,14 @@ namespace Sentinel.Core
         // Registry path for persistent routes
         private const string PersistentRoutesKey = @"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\PersistentRoutes";
 
-        // Virtual adapter name fragments to exclude (VPN, Docker, Hyper-V, WSL)
+        // Hypervisor / container / transition adapter description fragments whose routes are not
+        // tracked at all (Docker, Hyper-V, WSL, Teredo/ISATAP). VPN and overlay tunnels are NOT
+        // skipped silently any more: VpnTunnelClassifier recognises them and their full-traffic
+        // routes are reported as Tier2 observations that never feed the LAN MitM composite.
         private static readonly string[] VirtualAdapterFragments = new[]
         {
             "hyper-v", "virtual", "vmware", "vmnet", "virtualbox", "vethernet",
             "docker", "wsl", "loopback", "bluetooth", "teredo", "isatap",
-            "nordlynx", "wireguard", "tailscale", "cloudflare", "warp",
-            "openvpn", "tap-windows", "proton",
         };
 
         #region P/Invoke
@@ -188,7 +189,21 @@ namespace Sentinel.Core
 
                     // New route appeared since baseline
                     if (IsMulticastOrBroadcast(route.Destination)) continue;
-                    if (IsVirtualAdapter(route.InterfaceIndex)) continue;
+                    var (ifType, ifDescription) = ReadInterface(route.InterfaceIndex);
+                    if (IsTunnelInterface(ifType, ifDescription))
+                    {
+                        // A VPN client connecting installs routes on its own tunnel interface. That
+                        // is not a hijack of the LAN path, so it never takes the Tier1 isolate path
+                        // and never becomes a MitM leg; full-traffic capture is still recorded.
+                        ReportTunnelRoute(route, ifDescription);
+                        _baselineRoutes[route.Key] = route;
+                        continue;
+                    }
+                    if (IsVirtualAdapter(ifDescription))
+                    {
+                        _baselineRoutes[route.Key] = route;
+                        continue;
+                    }
 
                     // /32 host route from netmgmt protocol = injected by software, not DHCP/kernel
                     bool isHostRoute = route.Mask == 0xFFFFFFFF; // /32
@@ -510,7 +525,11 @@ namespace Sentinel.Core
             return firstOctet >= 224 || dest == 0xFFFFFFFF;
         }
 
-        private bool IsVirtualAdapter(int interfaceIndex)
+        /// <summary>
+        /// Reads the IANA interface type and driver description for an interface index.
+        /// Returns (0, "") when the interface cannot be read (it may have just gone away).
+        /// </summary>
+        private (int Type, string Description) ReadInterface(int interfaceIndex)
         {
             try
             {
@@ -520,14 +539,71 @@ namespace Sentinel.Core
                     bPhysAddr = new byte[8],
                     bDescr = new byte[256]
                 };
-                if (GetIfEntry(ref ifRow) != 0) return false;
+                if (GetIfEntry(ref ifRow) != 0) return (0, string.Empty);
 
-                var descr = System.Text.Encoding.ASCII.GetString(ifRow.bDescr, 0, ifRow.dwDescrLen).ToLowerInvariant();
-                return VirtualAdapterFragments.Any(f => descr.Contains(f));
+                int len = Math.Max(0, Math.Min(ifRow.dwDescrLen, ifRow.bDescr.Length));
+                var descr = System.Text.Encoding.ASCII.GetString(ifRow.bDescr, 0, len).TrimEnd('\0');
+                return (ifRow.dwType, descr);
             }
-            catch { return false; }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[RouteTableMonitor] GetIfEntry failed for interface {Index}", interfaceIndex);
+                return (0, string.Empty);
+            }
         }
 
+        private static bool IsTunnelInterface(int ifType, string description)
+            => ifType != 0 && VpnTunnelClassifier.IsTunnel(ifType, description);
+
+        private static bool IsVirtualAdapter(string description)
+        {
+            var descr = description.ToLowerInvariant();
+            return VirtualAdapterFragments.Any(f => descr.Contains(f));
+        }
+
+        /// <summary>
+        /// Records a VPN tunnel taking over all IPv4 traffic (0/0 or the 0/1 + 128/1 split).
+        /// Other tunnel routes (pushed subnets, the /32 to the VPN server) are absorbed silently,
+        /// as before. Tier2 / LogOnly, tagged so it never becomes a LAN MitM leg.
+        /// </summary>
+        private void ReportTunnelRoute(RouteEntry route, string ifDescription)
+        {
+            if (!VpnTunnelClassifier.IsDefaultClassRoute(route.Destination, route.Mask)) return;
+
+            var destIp = UintToIp(route.Destination);
+            var maskIp = UintToIp(route.Mask);
+            var nextHop = UintToIp(route.NextHop);
+            _ = _detectionEngine.EmitAsync(new DetectionEvent
+            {
+                RuleName = "VPN Tunnel: Full-Traffic Route Installed",
+                Evidence = $"VPN/overlay interface '{ifDescription}' (index {route.InterfaceIndex}) now carries " +
+                           $"{destIp}/{maskIp} via {nextHop} (proto={route.Proto}, metric={route.Metric}).",
+                Reasoning = "A VPN client routed all IPv4 traffic into its tunnel. This is expected when a VPN " +
+                            "connects and is recorded for context only. Sentinel still sees every connection " +
+                            "per process, because it observes sockets before the tunnel encrypts them.",
+                Confidence = 0.20,
+                Tier = DetectionTier.Tier2Indicator,
+                AuthorizedResponse = ResponseAction.LogOnly,
+                ProcessName = "SYSTEM", ProcessId = 0,
+                SignalType = SignalType.Generic,
+                Metadata = VpnTunnelClassifier.MarkTunnel(new Dictionary<string, string>
+                {
+                    ["Destination"] = destIp,
+                    ["Mask"] = maskIp,
+                    ["NextHop"] = nextHop,
+                    ["InterfaceIndex"] = route.InterfaceIndex.ToString(),
+                    ["ObserveOnly"] = "true",
+                    ["WeakObserveSeed"] = "true",
+                    [BehavioralCorrelationEngine.ObservationKeyMeta] = $"tunnel-route:{route.Key}"
+                })
+            });
+        }
+
+        /// <summary>
+        /// The primary (LAN) default gateway: the first up, non-loopback, NON-tunnel adapter with
+        /// an IPv4 gateway. Tunnel adapters are excluded so a VPN connecting does not look like
+        /// the LAN gateway being replaced (which is a Tier1 isolate signal).
+        /// </summary>
         private static string? GetDefaultGateway()
         {
             try
@@ -536,6 +612,7 @@ namespace Sentinel.Core
                 {
                     if (ni.OperationalStatus != OperationalStatus.Up) continue;
                     if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                    if (VpnTunnelClassifier.IsTunnel(ni)) continue;
                     var gw = ni.GetIPProperties().GatewayAddresses
                         .FirstOrDefault(g => g.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
                     if (gw != null) return gw.Address.ToString();
@@ -546,9 +623,11 @@ namespace Sentinel.Core
         }
 
         /// <summary>
-        /// v2.8.3: Every up, non-loopback adapter's first IPv4 gateway, keyed by interface id.
-        /// Used to catch a rogue gateway on a SECONDARY adapter that <see cref="GetDefaultGateway"/>
-        /// (first-adapter only) misses. Best-effort; adapters without a gateway are omitted.
+        /// v2.8.3: Every up, non-loopback, non-tunnel adapter's first IPv4 gateway, keyed by
+        /// interface id. Used to catch a rogue gateway on a SECONDARY LAN adapter that
+        /// <see cref="GetDefaultGateway"/> (first-adapter only) misses. A VPN tunnel's own
+        /// gateway is not a LAN path and is excluded (VpnTunnelLeakMonitor reports tunnel state).
+        /// Best-effort; adapters without a gateway are omitted.
         /// </summary>
         private static IEnumerable<KeyValuePair<string, string>> GetInterfaceGateways()
         {
@@ -559,6 +638,7 @@ namespace Sentinel.Core
                 {
                     if (ni.OperationalStatus != OperationalStatus.Up) continue;
                     if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                    if (VpnTunnelClassifier.IsTunnel(ni)) continue;
                     var gw = ni.GetIPProperties().GatewayAddresses
                         .FirstOrDefault(g => g.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
                                              && !g.Address.Equals(IPAddress.Any));

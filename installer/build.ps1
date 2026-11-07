@@ -21,14 +21,45 @@ Write-Host "Version: $Version" -ForegroundColor Green
 # 0.1 Stamp all .csproj files with the version
 $CsprojFiles = Get-ChildItem (Join-Path $PSScriptRoot "..") -Recurse -Filter "*.csproj" |
     Where-Object { $_.FullName -notmatch '[\\/]tools[\\/]' }
-foreach ($csproj in $CsprojFiles) {
-    $content = Get-Content $csproj.FullName -Raw
-    if ($content -match '<Version>') {
-        $content = $content -replace '<Version>[^<]+</Version>', "<Version>$Version</Version>"
-        Set-Content $csproj.FullName -Value $content -NoNewline
+# Set-Content truncates the file before writing. If another process (an MSBuild/dotnet build
+# server node, an IDE language server, AV or file monitoring) holds the file, the write fails
+# after the truncate and leaves a 0-byte .csproj ("Root element is missing"). So: never touch a
+# file whose version is already current, write the new content to a temp file and swap it in
+# with File.Replace (the original stays intact if anything fails), and retry briefly on a lock.
+function Write-FileSafely([string]$Path, [string]$Content) {
+    $temp = "$Path.stamp.tmp"
+    $backup = "$Path.stamp.bak"
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    for ($attempt = 1; $attempt -le 10; $attempt++) {
+        try {
+            [System.IO.File]::WriteAllText($temp, $Content, $utf8NoBom)
+            [System.IO.File]::Replace($temp, $Path, $backup)
+            Remove-Item $backup -Force -ErrorAction SilentlyContinue
+            return
+        }
+        catch {
+            Remove-Item $temp -Force -ErrorAction SilentlyContinue
+            if ($attempt -eq 10) { throw "Could not update $Path (file is locked by another process): $($_.Exception.Message)" }
+            Start-Sleep -Milliseconds 500
+        }
     }
 }
-Write-Host "Stamped project versions to $Version" -ForegroundColor Yellow
+
+$stamped = 0
+foreach ($csproj in $CsprojFiles) {
+    $content = [System.IO.File]::ReadAllText($csproj.FullName)
+    if ([string]::IsNullOrWhiteSpace($content)) {
+        throw "$($csproj.FullName) is empty. Restore it (git checkout -- <file>) before building."
+    }
+    if ($content -match '<Version>') {
+        $updated = $content -replace '<Version>[^<]+</Version>', "<Version>$Version</Version>"
+        if ($updated -ne $content) {
+            Write-FileSafely $csproj.FullName $updated
+            $stamped++
+        }
+    }
+}
+Write-Host "Stamped project versions to $Version ($stamped file(s) changed)" -ForegroundColor Yellow
 
 # 0.2 Stamp Inno Setup script
 $SetupScript = Join-Path $PSScriptRoot "setup.iss"
@@ -179,18 +210,11 @@ foreach ($target in @("service", "agent")) {
     Write-Host "Pruned *.pdb from $target\" -ForegroundColor Yellow
 }
 
-# 3d-GVPN. Build the GVPN module fresh and stage it for the installer.
-#     Built every time so a stale bin\Release\GVPN.exe can never ship.
-Write-Host "Building and staging GVPN module..." -ForegroundColor Yellow
-$GvpnBuild = Join-Path $PSScriptRoot "..\modules\GVPN\build.ps1"
-$GvpnExe = Join-Path $PSScriptRoot "..\modules\GVPN\bin\Release\GVPN.exe"
+# GVPN is a separate project (its own repository and installer). Sentinel no longer builds,
+# bundles or installs it; setup only migrates a previously bundled copy out of {app}\GVPN.
+# Remove a stale staging folder so an old GVPN payload can never ship inside this installer.
 $GvpnOut = Join-Path $PublishDir "gvpn"
-if (Test-Path $GvpnExe) { Remove-Item $GvpnExe -Force }
-& $GvpnBuild
-if ($LASTEXITCODE -ne 0 -or -not (Test-Path $GvpnExe)) { throw "GVPN build failed" }
-New-Item -ItemType Directory -Path $GvpnOut -Force | Out-Null
-Copy-Item $GvpnExe -Destination (Join-Path $GvpnOut "GVPN.exe") -Force
-Write-Host "Copied GVPN.exe -> publish\gvpn\" -ForegroundColor Yellow
+if (Test-Path $GvpnOut) { Remove-Item $GvpnOut -Recurse -Force }
 
 # 3e. Sign published binaries with Authenticode
 Write-Host "Signing published binaries..." -ForegroundColor Yellow
@@ -203,23 +227,6 @@ if (Test-Path $SignScript) {
         Write-Warning "Binary signing encountered an issue: $_"
     }
 }
-
-# 3f. Stage the bundled OpenVPN client + DCO driver for GVPN (after signing, so the
-#     vendor-signed OpenVPN/Microsoft binaries are never re-signed). Setup installs these
-#     offline; nothing is downloaded at install time. Every file must carry a valid
-#     signature or the build fails, so a swapped or corrupted vendor file cannot ship.
-Write-Host "Staging bundled OpenVPN for GVPN..." -ForegroundColor Yellow
-$OpenVpnSrc = Join-Path $PSScriptRoot "..\modules\GVPN\thirdparty\openvpn"
-$OpenVpnOut = Join-Path $GvpnOut "openvpn"
-if (-not (Test-Path (Join-Path $OpenVpnSrc "bin\openvpn.exe"))) {
-    throw "Bundled OpenVPN missing at $OpenVpnSrc (see modules\GVPN\thirdparty\openvpn\README.txt)"
-}
-Get-ChildItem $OpenVpnSrc -Recurse -Include *.exe,*.dll,*.sys,*.cat | ForEach-Object {
-    $sig = Get-AuthenticodeSignature $_.FullName
-    if ($sig.Status -ne 'Valid') { throw "Bundled OpenVPN file has no valid signature: $($_.FullName) ($($sig.Status))" }
-}
-Copy-Item $OpenVpnSrc -Destination $OpenVpnOut -Recurse -Force
-Write-Host "Copied OpenVPN -> publish\gvpn\openvpn\" -ForegroundColor Yellow
 
 # 4. Locate Inno Setup Compiler
 Write-Host "Locating Inno Setup compiler..." -ForegroundColor Yellow

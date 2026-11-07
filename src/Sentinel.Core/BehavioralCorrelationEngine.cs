@@ -56,8 +56,8 @@ namespace Sentinel.Core
             {
                 // v2.6.0: Local network-tamper signals (ARP/DNS/route/bridge/WPAD/WiFi) are
                 // emitted by SYSTEM monitors with PID 0. They have no per-PID buffer, so
-                // correlate them in a dedicated host-wide path that can emit the protective
-                // VPN-shield composite. NOTE: some signals (e.g. WPAD/PAC) are ALSO host-wide
+                // correlate them in a dedicated host-wide path that can emit the (report-only)
+                // "Network Tamper: Local MitM Chain" composite. NOTE: some signals (e.g. WPAD/PAC) are ALSO host-wide
                 // delivery fuel for other composites (WPAD Proxy Hijack Chain) - so we feed both
                 // buffers rather than short-circuiting, preserving existing composites.
                 if (IsNetworkTamperFuel(signal))

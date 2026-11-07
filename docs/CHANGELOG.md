@@ -1,5 +1,28 @@
 # Changelog
 
+## [3.6.8] - 2026-11-07
+
+### Removed - VPN is no longer part of Sentinel
+- **GVPN is a separate project.** The installer no longer builds, ships, installs or autostarts GVPN or its bundled OpenVPN/TAP driver, and the "Start GVPN" setup task and Start-menu shortcut are gone. `installer/build.ps1` no longer builds `modules/GVPN`.
+- **Upgrade migration (path-checked):** a GVPN bundled by an older release in `{app}\GVPN` is stopped (by image path, not `taskkill /IM`), its sign-in task is removed only when it points at `{app}\GVPN\GVPN.exe`, its Run value only when it points there, and its kill-switch firewall rules only when no separate GVPN is running. `{app}\GVPN` is then removed. The `GVPN TAP` adapter and TAP driver are left for a standalone GVPN / other OpenVPN installs. Uninstall applies the same rules, so a standalone GVPN is never touched.
+- **VPN shield retired:** `VpnShieldEngine`, its RAS tunnel, `VpnShieldConfig`, `ProductPosture.AllowsVpnShield` and the shield-only `NetworkInterfaceGuard` clean/verify helpers are removed. A stale `VpnShield` key in an older `config.enc` is ignored. `ResponseAction.VpnShieldUp` stays as an `[Obsolete]` slot purely so serialized enum numbers in events.jsonl / audit / replay stay stable; it is never emitted and is handled as LogOnly.
+
+### Changed
+- **`Network Tamper: Local MitM Chain` is a LogOnly report.** Firing rules are unchanged (>= 2 independent tamper vectors). `ResponsePolicy.IsReportOnlyNetworkTamper` keeps it LogOnly through dispatch policy, tier law and chain promotion, which previously would have rewritten a non-shield PID-0 composite to QuarantineAndKill. The tag only applies to PID 0-4 events.
+
+### Fixed - running Sentinel next to GVPN or any other VPN
+- **False "Local MitM Chain" on every VPN connect:** a VPN adapter appearing after startup ("New Adapter Appeared") plus its own gateway ("Additional Gateway Appeared") formed two independent legs. Tunnel interfaces are now classified by `VpnTunnelClassifier` (IANA type PPP/PROP_VIRTUAL/TUNNEL or driver description - never the user-renamable connection name; Wi-Fi never by description; Teredo/ISATAP/6to4/IP-HTTPS excluded) and their observations are tagged so they never count as LAN MitM legs.
+- **`RouteTableMonitor`:** a VPN taking the default route could fire Tier1 "New Default Route Injected" (NetworkIsolate), and a tunnel listed first could fire Tier1 "Default Gateway Changed". Tunnel routes no longer take those paths; full-traffic tunnel routes (0/0, 0/1 + 128/1) are recorded as Tier2 `VPN Tunnel: Full-Traffic Route Installed`. The LAN gateway and per-adapter gateway checks exclude tunnels. GVPN/L2TP/RAS/Wintun tunnels were previously not recognised at all.
+- **`ArpSpoofMonitor`:** baselines the LAN gateway instead of a tunnel peer (and skips loopback), so the static ARP lock no longer lands on the wrong interface.
+- **`TrafficVolumeBaseline`:** counts non-tunnel adapters only; tunnelled bytes were counted twice (tunnel + physical).
+- **VPN identity:** OpenVPN unpacked by standalone GVPN under `%ProgramFiles%\GVPN\openvpn` is recognised as a VPN install path (Authenticode still required).
+
+### Added
+- **`VpnTunnelLeakMonitor`** (NetworkIntegrity, 20 s, observe-only Tier2/LogOnly, no mutation): `VPN Tunnel: Connected` / `Disconnected`, `IPv4 Traffic Bypasses Tunnel`, `IPv6 Traffic Bypasses Tunnel`, `Resolver Outside Tunnel`. Reported once per tunnel session. Uses OS state only; GVPN's `vpn.log` is user-writable and is never read or trusted.
+
+### Testing
+- New `NetworkTamperCompositeTests`, `VpnTunnelClassifierTests`, `VpnTunnelLeakMonitorTests`; `NetworkTamperFuelTests` extended with VPN-connect, tunnel-plus-LAN-tamper and PID-guard cases. `VpnShieldTests` retired.
+
 ## [3.6.6] - 2026-11-06
 
 ### Added

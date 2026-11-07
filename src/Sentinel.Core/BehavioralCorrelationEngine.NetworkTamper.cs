@@ -36,8 +36,8 @@ namespace Sentinel.Core
 
         // v2.6.0: Host-wide local network-tamper correlation (PID-0 SYSTEM monitors).
         private readonly List<DetectionEvent> _networkTamper = new();
-        private DateTime _lastVpnShieldEmit = DateTime.MinValue;
-        private static readonly TimeSpan VpnShieldReEmitCooldown = TimeSpan.FromSeconds(120);
+        private DateTime _lastNetworkTamperEmit = DateTime.MinValue;
+        private static readonly TimeSpan NetworkTamperReEmitCooldown = TimeSpan.FromSeconds(120);
 
         /// <summary>
         /// v2.6.0: True for a local network-tamper signal that indicates active LAN MitM /
@@ -48,6 +48,13 @@ namespace Sentinel.Core
         /// </summary>
         internal static bool IsNetworkTamperFuel(DetectionEvent signal)
         {
+            // A VPN/overlay tunnel adapter coming up (new adapter, its gateway, its routes) is a
+            // host-side path the user installed, not a man-in-the-middle on the LAN path. Those
+            // observations are still logged, but they must not become legs of the LAN MitM chain,
+            // otherwise every VPN connect after startup (New Adapter + Additional Gateway) would
+            // self-assemble a "Local MitM Chain". Only Sentinel's own monitors set this marker,
+            // from the interface type/description they read from the OS.
+            if (VpnTunnelClassifier.IsTunnelObservation(signal)) return false;
             var n = signal?.RuleName ?? "";
             return n.IndexOf("ARP Spoof", StringComparison.OrdinalIgnoreCase) >= 0
                 || n.IndexOf("Network Bridge", StringComparison.OrdinalIgnoreCase) >= 0
@@ -188,13 +195,14 @@ namespace Sentinel.Core
         }
 
         /// <summary>
-        /// v2.6.0: Emit the protective VPN-shield composite when >= 2 DISTINCT local network-tamper
-        /// vectors (e.g. ARP spoof + DNS change, or bridge + route injection) are seen within the
-        /// correlation window - multi-signal proof of an active LAN MitM. The composite authorizes
-        /// <see cref="ResponseAction.VpnShieldUp"/> (a non-kill network-integrity remediation), NOT
-        /// a process nuke: these signals originate from SYSTEM/PID 0 and there is no malicious
-        /// process to terminate. The response engine still Tier1-guards it and re-checks
-        /// <see cref="ProductPosture.AllowsVpnShield"/> before raising a tunnel.
+        /// Emit the "Network Tamper: Local MitM Chain" composite when >= 2 DISTINCT local
+        /// network-tamper vectors (e.g. ARP spoof + DNS change, or bridge + route injection) that
+        /// rest on independent observations are seen within the correlation window - multi-signal
+        /// proof of an active LAN MitM. The composite is a confirmed Tier1 REPORT authored LogOnly:
+        /// the signals originate from SYSTEM/PID 0, there is no process to terminate, and Sentinel
+        /// no longer raises a VPN tunnel (that is the job of a separate VPN client such as GVPN).
+        /// <see cref="ResponsePolicy.IsReportOnlyNetworkTamper"/> keeps it LogOnly through chain
+        /// and composite promotion.
         /// </summary>
         private async Task EvaluateNetworkTamperCompositeAsync()
         {
@@ -215,10 +223,9 @@ namespace Sentinel.Core
             // no ObservationKey are treated as independent, so this only tightens, never loosens.
             if (CountIndependentTamperVectors(snapshot) < 2) return;
 
-            // Re-emit cooldown so a burst of tamper signals doesn't spam shield actions
-            // (the shield engine is single-flight anyway, but keep the log clean).
-            if (DateTime.UtcNow - _lastVpnShieldEmit < VpnShieldReEmitCooldown) return;
-            _lastVpnShieldEmit = DateTime.UtcNow;
+            // Re-emit cooldown so a burst of tamper signals doesn't spam the report.
+            if (DateTime.UtcNow - _lastNetworkTamperEmit < NetworkTamperReEmitCooldown) return;
+            _lastNetworkTamperEmit = DateTime.UtcNow;
 
             var vectorList = string.Join(" + ", vectors);
             var composite = new DetectionEvent
@@ -228,19 +235,20 @@ namespace Sentinel.Core
                 ProcessName = "SYSTEM",
                 Confidence = 0.95,
                 Tier = DetectionTier.Tier1Behavioral,
-                AuthorizedResponse = ResponseAction.VpnShieldUp,
+                AuthorizedResponse = ResponseAction.LogOnly,
                 SignalType = SignalType.SecurityEvasion,
                 Evidence = $"[COMPOSITE] Multiple independent local network-tamper vectors within the correlation window: {vectorList}.",
                 Reasoning = "Two or more independent local-network tamper indicators (ARP poisoning, DNS " +
-                            "redirection, route injection, adapter bridging) occurred together - proof of an " +
-                            "active man-in-the-middle on the local path. Sentinel raises a protective VPN " +
-                            "tunnel to shield the user's traffic while it cleans the network, then drops the " +
-                            "tunnel once the path is verified clean.",
+                            "redirection, route injection, adapter bridging) occurred together - evidence of an " +
+                            "active man-in-the-middle on the local path. Sentinel reports it; it does not raise a " +
+                            "tunnel. Traffic already inside a VPN tunnel is encrypted end-to-end to the VPN server, " +
+                            "but anything that bypasses the tunnel (split routes, IPv6, DNS on the physical " +
+                            "adapter) is exposed until the local network is fixed.",
                 Timestamp = DateTime.UtcNow,
                 Metadata = new Dictionary<string, string>
                 {
                     [ResponsePolicy.ChainConfirmedKey] = "true",
-                    [ResponsePolicy.TerminalOutcomeKey] = "NetworkTamper",
+                    [ResponsePolicy.TerminalOutcomeKey] = ResponsePolicy.NetworkTamperOutcome,
                     ["MitmDefense"] = "true",
                     ["TamperVectors"] = vectorList
                 }

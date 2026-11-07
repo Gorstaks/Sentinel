@@ -552,6 +552,12 @@ namespace Sentinel.Core
             }
         }
 
+        /// <summary>
+        /// Bytes sent on every up, non-loopback, NON-tunnel adapter. With a VPN active the same
+        /// payload is counted once on the tunnel adapter (plaintext) and again on the physical
+        /// adapter (encrypted), so summing both doubled the volume on every VPN connect and broke
+        /// the baseline. Counting only non-tunnel adapters measures what actually leaves the host.
+        /// </summary>
         private static long GetTotalBytesSent()
         {
             long total = 0;
@@ -561,6 +567,7 @@ namespace Sentinel.Core
                 {
                     if (ni.OperationalStatus != OperationalStatus.Up) continue;
                     if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                    if (VpnTunnelClassifier.IsTunnel(ni)) continue;
                     var stats = ni.GetIPStatistics();
                     total += stats.BytesSent;
                 }

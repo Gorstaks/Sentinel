@@ -21,6 +21,40 @@ namespace Sentinel.Core
         public const string TerminalOutcomeKey = "TerminalOutcome";
 
         /// <summary>
+        /// Terminal outcome of the host-wide "Network Tamper: Local MitM Chain" composite. That
+        /// composite is a confirmed REPORT, not a response: it originates from SYSTEM/PID 0
+        /// monitors, there is no process to terminate, and Sentinel no longer raises a tunnel
+        /// (VPN clients such as GVPN are separate products).
+        /// </summary>
+        public const string NetworkTamperOutcome = "NetworkTamper";
+
+        /// <summary>
+        /// True for a detection that must stay LogOnly however it is chain-confirmed or
+        /// composite-promoted: the host-wide network-tamper composite (PID 0-4 only, so a
+        /// process-attributed detection can never use the tag to shed its response), and any
+        /// stale event or rule pack that still names the retired VPN-shield action.
+        /// </summary>
+        internal static bool IsReportOnlyNetworkTamper(DetectionEvent detection)
+        {
+            if (detection == null) return false;
+#pragma warning disable CS0618 // Retired action: matched only so it can be neutralised.
+            if (detection.AuthorizedResponse == ResponseAction.VpnShieldUp) return true;
+#pragma warning restore CS0618
+            return detection.ProcessId <= 4 &&
+                   detection.Metadata != null &&
+                   detection.Metadata.TryGetValue(TerminalOutcomeKey, out var outcome) &&
+                   string.Equals(outcome, NetworkTamperOutcome, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Pins a report-only network-tamper detection to LogOnly.</summary>
+        private static void PinNetworkTamperReport(DetectionEvent detection)
+        {
+            detection.AuthorizedResponse = ResponseAction.LogOnly;
+            detection.Metadata ??= new Dictionary<string, string>();
+            detection.Metadata["ReportOnly"] = "NetworkTamper";
+        }
+
+        /// <summary>
         /// The only single-signal families that may carry Tier1 (kill-grade) labels.
         /// Everything else is Tier2 observe fuel for correlation / composites.
         /// v2.6: derived from the typed <see cref="TerminalFamily"/> taxonomy so a
@@ -442,8 +476,12 @@ namespace Sentinel.Core
             }
             // Non-process host remediations retain their action-specific authorization
             // checks in the executor (e.g. explicit certificate distrust policy).
+            if (IsReportOnlyNetworkTamper(detection))
+            {
+                PinNetworkTamperReport(detection);
+                return;
+            }
             if (detection.AuthorizedResponse == ResponseAction.RemoveCert ||
-                detection.AuthorizedResponse == ResponseAction.VpnShieldUp ||
                 detection.AuthorizedResponse == ResponseAction.RemoveRegistryEntry ||
                 detection.AuthorizedResponse == ResponseAction.DismountVolume)
                 return;
@@ -487,12 +525,11 @@ namespace Sentinel.Core
             if (IsNukeComposite(detection))
             {
                 detection.Tier = DetectionTier.Tier1Behavioral;
-                // v2.6.0: A network-tamper composite authors the non-kill VPN-shield remediation
-                // (SYSTEM/PID 0 origin, no process to terminate). Do NOT rewrite it into a
-                // process nuke - preserve the author action so the response engine can raise the
-                // protective tunnel instead of quarantine-and-kill.
-                if (detection.AuthorizedResponse != ResponseAction.VpnShieldUp &&
-                    detection.AuthorizedResponse < ResponseAction.KillProcessTree)
+                // The host-wide network-tamper composite is a report (SYSTEM/PID 0 origin, no
+                // process to terminate). Never rewrite it into a process nuke.
+                if (IsReportOnlyNetworkTamper(detection))
+                    PinNetworkTamperReport(detection);
+                else if (detection.AuthorizedResponse < ResponseAction.KillProcessTree)
                     detection.AuthorizedResponse = ResponseAction.QuarantineAndKill;
                 detection.Metadata["TierLaw"] = "Composite";
                 return;
@@ -1038,13 +1075,9 @@ namespace Sentinel.Core
             if (detection == null || config == null)
                 return false;
 
-            // v2.6.0: The protective VPN-shield remediation is a network-integrity action in the
-            // same MITM family, but gated on its OWN posture switch (VpnShield.Enabled), NOT on
-            // MitmDefense.Enabled. Check it before the MitmDefense gate so enabling VpnShield
-            // alone is sufficient to exempt it from the multi-signal chain gate. Still non-kill;
-            // the response engine Tier1-guards it and re-checks ProductPosture.AllowsVpnShield.
-            if (detection.AuthorizedResponse == ResponseAction.VpnShieldUp)
-                return ProductPosture.AllowsVpnShield(config);
+            // The network-tamper report authorizes no host mutation (the VPN shield is retired).
+            if (IsReportOnlyNetworkTamper(detection))
+                return false;
 
             if (!ProductPosture.AllowsMitmDefenseMutations(config))
                 return false;
@@ -1125,13 +1158,13 @@ namespace Sentinel.Core
         {
             if (detection == null) return;
             detection.Tier = DetectionTier.Tier1Behavioral;
-            // v2.6.0: The protective VPN-shield action is a non-kill network-integrity
-            // remediation (SYSTEM/PID 0 origin, no malicious process to terminate). Chain
-            // confirmation must NOT rewrite it into a process nuke - preserve the author action.
-            if (detection.AuthorizedResponse == ResponseAction.VpnShieldUp)
+            // The host-wide network-tamper composite (SYSTEM/PID 0 origin, no malicious process
+            // to terminate) is a confirmed report. Chain confirmation must NOT rewrite it into a
+            // process nuke.
+            if (IsReportOnlyNetworkTamper(detection))
             {
-                detection.Metadata ??= new Dictionary<string, string>();
-                detection.Metadata[ChainConfirmedKey] = "true";
+                PinNetworkTamperReport(detection);
+                detection.Metadata![ChainConfirmedKey] = "true";
                 return;
             }
             // KillAuthorized is derived from AuthorizedResponse >= KillProcess

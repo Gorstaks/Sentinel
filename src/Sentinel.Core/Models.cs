@@ -15,12 +15,13 @@ namespace Sentinel.Core
         NetworkIsolate,
         RemoveCert,
         /// <summary>
-        /// v2.6.0: Raise a protective userland VPN tunnel as a temporary shield during a
-        /// confirmed local network-tamper incident (ARP/DNS/route/bridge MitM), then clean
-        /// the network and drop the tunnel once the path is verified clean. Non-kill,
-        /// non-destructive to processes - a network-integrity remediation. Ordered BELOW
-        /// KillProcess so <see cref="DetectionEvent.KillAuthorized"/> stays false for it.
+        /// RETIRED. Formerly raised a protective VPN tunnel during a network-tamper incident;
+        /// VPN tunnels now belong to separate VPN clients (GVPN). The member is kept ONLY so the
+        /// numeric values of every later action stay stable: events.jsonl, audit logs and offline
+        /// replay serialize this enum as a number. Nothing emits it; the response engine treats it
+        /// as LogOnly. Ordered below KillProcess so KillAuthorized stays false for it.
         /// </summary>
+        [System.Obsolete("VPN shield retired; Sentinel reports network tamper as LogOnly. Kept for stable serialized enum values.")]
         VpnShieldUp,
         KillProcess,
         KillProcessTree,
@@ -108,64 +109,6 @@ namespace Sentinel.Core
         public string[] KnownRogueCastIps { get; set; } = { "192.168.1.100" };
     }
 
-    public class VpnShieldConfig
-    {
-        /// <summary>
-        /// Master switch. v2.9.4: ALWAYS TRUE - no off switch. Setter is a no-op. On a
-        /// confirmed network-tamper chain the protective VPN shield engages and cannot be
-        /// disabled from config. NOTE: to actually shield, configure a trusted
-        /// <see cref="ProviderProfile"/>; without one there is no tunnel to raise (fail-safe:
-        /// the incident is still reported, traffic is not silently routed through an unknown
-        /// relay unless <see cref="UseVpnGateFallback"/> is explicitly set).
-        /// </summary>
-        public bool Enabled { get => true; set { } }
-
-        /// <summary>
-        /// Name of a pre-configured Windows RAS/VPN phonebook entry (a trusted provider such
-        /// as a paid Proton/Mullvad profile, or a corporate VPN). This is the RECOMMENDED
-        /// path: the operator configures a trusted tunnel once, and Sentinel raises it on
-        /// demand. Empty = no trusted profile configured.
-        /// </summary>
-        public string ProviderProfile { get; set; } = string.Empty;
-
-        /// <summary>
-        /// Last-resort fallback ONLY when <see cref="ProviderProfile"/> is empty. When true,
-        /// Sentinel may dial a VPN Gate public volunteer relay to get the user off the hostile
-        /// local path. This is a TRADEOFF, not a clean win: a VPN Gate exit is operated by an
-        /// unknown volunteer and replaces a local attacker with a remote unknown one. It
-        /// defends against the LAN MitM but is NOT equivalent to a trusted paid tunnel, and
-        /// the incident report says so. Default false - the operator must opt in explicitly.
-        /// </summary>
-        public bool UseVpnGateFallback { get; set; } = false;
-
-        /// <summary>
-        /// Transient RAS entry name Sentinel creates/uses for the VPN Gate fallback dial.
-        /// Only used when <see cref="UseVpnGateFallback"/> is true and no trusted profile
-        /// exists. VPN Gate's well-known shared credentials are vpn/vpn (public relays).
-        /// </summary>
-        public string VpnGateEntryName { get; set; } = "Sentinel-Shield-Fallback";
-
-        /// <summary>
-        /// Seconds between clean-and-verify sweeps while the shield is up. Each sweep asks the
-        /// network to be cleaned and re-checks integrity (gateway MAC, DNS, no bridge, DNS
-        /// cross-validation). The tunnel drops only after a clean sweep.
-        /// </summary>
-        public int VerifyIntervalSeconds { get; set; } = 20;
-
-        /// <summary>
-        /// Consecutive clean sweeps required before the tunnel is dropped (hysteresis so a
-        /// single lucky poll doesn't tear down the shield prematurely).
-        /// </summary>
-        public int CleanSweepsRequired { get; set; } = 3;
-
-        /// <summary>
-        /// Hard ceiling on how long the shield may stay up for a single incident (seconds).
-        /// On expiry Sentinel keeps the tunnel but escalates the incident report - it never
-        /// silently drops an unverified-clean shield.
-        /// </summary>
-        public int MaxShieldSeconds { get; set; } = 1800;
-    }
-
     public class SentinelConfig
     {
         /// <summary>
@@ -197,14 +140,8 @@ namespace Sentinel.Core
         /// </summary>
         public MitmDefenseConfig MitmDefense { get; set; } = new();
 
-        /// <summary>
-        /// v2.6.0: Protective VPN-shield remediation for confirmed local network tampering.
-        /// When Enabled: a chain-confirmed network-tamper incident raises a temporary userland
-        /// VPN tunnel, the network is cleaned (unbridge / DNS restore / rogue-route drop), and
-        /// the tunnel is dropped only after the path is verified clean (fail-safe: stays up if
-        /// it cannot be verified). Default off for clean installs.
-        /// </summary>
-        public VpnShieldConfig VpnShield { get; set; } = new();
+        // The VpnShield section was removed (VPN tunnels are run by separate VPN clients such
+        // as GVPN). A stale "VpnShield" key in an older config.enc is ignored on load.
         // Optional modern detection extensions
         // Local process-memory injection scanner. It does not use an online IOC feed.
         public bool EnableIntelThreatIntel { get; set; } = true;

@@ -49,15 +49,5 @@ namespace Sentinel.Core
                    && config.MitmDefense != null
                    && config.MitmDefense.Enabled;
         }
-
-        /// <summary>
-        /// v2.6.0: Protective VPN-shield remediation for confirmed local network tampering.
-        /// DISABLED: Replaced with GVPN (Global VPN Manager) module for always-on VPN protection.
-        /// </summary>
-        public static bool AllowsVpnShield(SentinelConfig? config)
-        {
-            // VPN Shield is disabled - use GVPN instead
-            return false;
-        }
     }
 }

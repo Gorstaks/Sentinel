@@ -8,29 +8,16 @@ This repository follows strict architectural, workflow, and security rules:
 4. **Architecture & Design**: See `docs/design.md`, `docs/requirements.md`, and `docs/constraints.md`.
 
 
-## Modules
+## VPN coexistence (no bundled VPN)
 
-### GVPN - Global VPN Manager
+GVPN is a **separate project** (`D:\Gorstak\GVPN`, its own repo and installer). Sentinel does not build,
+bundle, install, start or control any VPN, and has no VPN response action. Setup only migrates a copy
+that older releases bundled in `{app}\GVPN` (path-checked, so a standalone GVPN is never touched).
 
-**Location**: `modules/GVPN/`
-
-**Purpose**: Lightweight Windows VPN management module providing automatic L2TP/IPSec connection creation, monitoring, and auto-reconnection with kill switch.
-
-**Build**: `modules/GVPN/build.ps1` → `bin/Release/GVPN.exe` (31 KB)
-
-**Features**:
-- Automatic VPN setup on first run (admin required once)
-- Auto-reconnection with intelligent failover (5-server cascade)
-- Kill switch for immediate traffic blocking
-- System tray integration with one-click controls
-- Comprehensive logging to `vpn.log`
-
-**Integration Points**:
-- Agent can deploy GVPN.exe to endpoints
-- Monitor VPN status via `vpn.log` log aggregation
-- Trigger VPN connections based on Sentinel policies
-- Activate kill switch on threat detection
-
-**Architecture**: Userland Windows Forms app, no kernel/persistence. Transparent in Task Manager. Respects Sentinel's hard constraints (fail-closed, LogOnly on uncertain signals).
-
-**See Also**: `modules/GVPN/MODULE.md` for full documentation and Sentinel integration details.
+Sentinel must work correctly next to GVPN or any other VPN client:
+- Classify tunnel interfaces with `VpnTunnelClassifier` (IANA type or driver description, never the
+  user-renamable connection name). Tunnel routes/gateways/adapters are Tier2 context and are tagged
+  (`TunnelAdapter=true`) so they never become LAN MitM legs.
+- `VpnTunnelLeakMonitor` reports tunnel state and bypasses (IPv4 route, IPv6, resolvers), observe-only.
+- Never trust a VPN client's own log (`vpn.log` is user-writable) for any allow/suppress decision.
+- `ResponseAction.VpnShieldUp` is an `[Obsolete]` numeric slot kept for serialized-log stability. Do not use it.

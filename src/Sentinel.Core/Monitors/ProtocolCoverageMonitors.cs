@@ -174,6 +174,8 @@ namespace Sentinel.Core
             @"\program files\tailscale\",
             @"\program files\wireguard\",
             @"\program files\openvpn\",
+            // Standalone GVPN unpacks its signed OpenVPN client here (admin-only location).
+            @"\program files\gvpn\openvpn\",
             @"\program files\nordvpn\",
             @"\program files\expressvpn\",
             @"\program files\surfshark\",

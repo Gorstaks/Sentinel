@@ -153,105 +153,6 @@ namespace Sentinel.Core
             }
         }
 
-        /// <summary>
-        /// v2.6.0: On-demand network clean for the VPN-shield remediation chain.
-        ///
-        /// Unlike the periodic loop (which gates cleaning on
-        /// <see cref="ResponsePolicy.MayPerformInlineHostMutation"/>), this is invoked ONLY by
-        /// <c>VpnShieldEngine</c> after a network-tamper incident is already chain-confirmed
-        /// and the user is behind the protective tunnel - so the mutation is already authorized.
-        /// It unbridges, re-enables disabled physical adapters, and leaves DNS changes to explicit administrator-approved repair.
-        /// Best-effort and non-throwing (graceful degradation).
-        /// </summary>
-        public async Task ForceCleanAsync(CancellationToken ct)
-        {
-            try { RemoveNetworkBridge(); } catch (Exception ex) { _logger.LogDebug(ex, "[NetworkInterfaceGuard] ForceClean: bridge removal error"); }
-            try { await RestoreDisabledAdaptersAsync(ct).ConfigureAwait(false); } catch (Exception ex) { _logger.LogDebug(ex, "[NetworkInterfaceGuard] ForceClean: adapter restore error"); }
-            _logger.LogInformation("[NetworkInterfaceGuard] DNS startup observations are not repair authority; use administrator-approved DNS repair.");
-        }
-
-        /// <summary>
-        /// v2.6.0: Returns true when the interface state matches the clean baseline captured at
-        /// startup - no network bridge present, no baselined physical adapter left disabled, and
-        /// every interface's registry DNS matches its baseline. Used by <c>VpnShieldEngine</c> to
-        /// decide when it is safe to drop the protective tunnel. Fail-safe: on any error this
-        /// returns <c>false</c> (treat as "not verified clean", keep the shield up).
-        /// </summary>
-        public bool IsNetworkClean()
-        {
-            try
-            {
-                // 1. No network bridge interface present.
-                bool hasBridge = NetworkInterface.GetAllNetworkInterfaces()
-                    .Any(ni => ni.Description.Contains("MAC Bridge") ||
-                               ni.Description.Contains("Multiplexor Driver"));
-                if (hasBridge) return false;
-
-                // 2. No baselined physical adapter left administratively down.
-                try
-                {
-                    var scope = new ManagementScope(@"root\StandardCimv2");
-                    scope.Connect();
-                    var query = new ObjectQuery("SELECT InterfaceIndex, AdminStatus FROM MSFT_NetAdapter WHERE Virtual = false");
-                    using var searcher = new ManagementObjectSearcher(scope, query);
-                    foreach (ManagementObject obj in searcher.Get())
-                    {
-                        int index = Convert.ToInt32(obj["InterfaceIndex"]);
-                        int adminStatus = Convert.ToInt32(obj["AdminStatus"]);
-                        if (_baselinePhysicalInterfaceIndices.Contains(index) && adminStatus == 2)
-                            return false; // a baselined adapter is still Down
-                    }
-                }
-                catch { return false; }
-
-                // 3. Every interface's registry DNS matches its baseline.
-                foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
-                {
-                    if (_baselineDnsServers.TryGetValue(ni.Id, out var baselineDns))
-                    {
-                        var currentDns = GetRegistryDns(ni.Id);
-                        if (!string.IsNullOrEmpty(currentDns) && !currentDns!.Equals(baselineDns))
-                            return false; // DNS still drifted from baseline
-                    }
-                }
-
-                return true;
-            }
-            catch
-            {
-                return false; // fail-safe: unknown state == not clean
-            }
-        }
-
-        private async Task RestoreDisabledAdaptersAsync(CancellationToken ct)
-        {
-            try
-            {
-                var scope = new ManagementScope(@"root\StandardCimv2");
-                scope.Connect();
-                var query = new ObjectQuery("SELECT InterfaceIndex, Name, AdminStatus FROM MSFT_NetAdapter WHERE Virtual = false");
-                using var searcher = new ManagementObjectSearcher(scope, query);
-                foreach (ManagementObject obj in searcher.Get())
-                {
-                    if (ct.IsCancellationRequested) return;
-                    int index = Convert.ToInt32(obj["InterfaceIndex"]);
-                    string name = obj["Name"]?.ToString() ?? "";
-                    int adminStatus = Convert.ToInt32(obj["AdminStatus"]);
-                    if (_baselinePhysicalInterfaceIndices.Contains(index) && adminStatus == 2)
-                    {
-                        _logger.LogWarning("[NetworkInterfaceGuard] VPN-shield clean: re-enabling adapter '{Name}' (Index {Index})", name, index);
-                        obj.InvokeMethod("Enable", null);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "[NetworkInterfaceGuard] RestoreDisabledAdaptersAsync error");
-            }
-            await Task.CompletedTask;
-        }
-
-
         private void BaselinePhysicalAdapters()
         {
             try
@@ -302,22 +203,25 @@ namespace Sentinel.Core
         /// Enumerates every current network adapter (physical and virtual) as
         /// (InterfaceIndex, Name, Virtual). Best-effort; returns empty on failure.
         /// </summary>
-        private static IEnumerable<(int Index, string Name, bool Virtual)> EnumerateAdapters()
+        private static IEnumerable<(int Index, string Name, bool Virtual, int IfType, string Description)> EnumerateAdapters()
         {
-            var results = new List<(int, string, bool)>();
+            var results = new List<(int, string, bool, int, string)>();
             try
             {
                 var scope = new ManagementScope(@"root\StandardCimv2");
                 scope.Connect();
-                var query = new ObjectQuery("SELECT InterfaceIndex, Name, Virtual FROM MSFT_NetAdapter");
+                var query = new ObjectQuery("SELECT InterfaceIndex, Name, Virtual, InterfaceType, InterfaceDescription FROM MSFT_NetAdapter");
                 using var searcher = new ManagementObjectSearcher(scope, query);
                 foreach (ManagementObject obj in searcher.Get())
                 {
                     int index = Convert.ToInt32(obj["InterfaceIndex"]);
                     string name = obj["Name"]?.ToString() ?? "";
+                    string description = obj["InterfaceDescription"]?.ToString() ?? "";
                     bool virt = false;
                     try { virt = Convert.ToBoolean(obj["Virtual"]); } catch { }
-                    results.Add((index, name, virt));
+                    int ifType = 0;
+                    try { ifType = Convert.ToInt32(obj["InterfaceType"]); } catch { }
+                    results.Add((index, name, virt, ifType, description));
                 }
             }
             catch { }
@@ -326,8 +230,8 @@ namespace Sentinel.Core
 
         private static IEnumerable<int> EnumerateAllAdapterIndices()
         {
-            foreach (var (index, _, _) in EnumerateAdapters())
-                yield return index;
+            foreach (var adapter in EnumerateAdapters())
+                yield return adapter.Index;
         }
 
         /// <summary>
@@ -337,9 +241,12 @@ namespace Sentinel.Core
         /// this, so without this check it was a silent coverage gap.
         ///
         /// Emitted as Tier2 / LogOnly OBSERVE-FUEL, never a kill: adding an adapter is a legitimate
-        /// admin action and cannot be a solo kill signal (behavioral-only kill authority). Its value
-        /// is as an independent MitM leg feeding the network-tamper VPN-shield composite - a new
-        /// adapter alongside an ARP/DNS/route tamper is strong evidence of an active local MitM.
+        /// admin action and cannot be a solo kill signal (behavioral-only kill authority). A new
+        /// LAN-capable adapter (USB NIC, second Wi-Fi) is an independent leg for the local MitM
+        /// composite. A new VPN / overlay tunnel adapter (classified by interface type and driver
+        /// description, never by the user-renamable connection name) is recorded but tagged so it
+        /// is NOT a MitM leg: otherwise every VPN connect after startup would combine with its own
+        /// gateway into a false "Local MitM Chain".
         /// We never auto-remove the adapter (too destructive / FP-prone for a legitimate dongle).
         /// </summary>
         private void CheckForNewAdapters()
@@ -347,66 +254,60 @@ namespace Sentinel.Core
             if (!_adapterBaselineCaptured) return;
             try
             {
-                foreach (var (index, name, virt) in EnumerateAdapters())
+                foreach (var (index, name, virt, ifType, description) in EnumerateAdapters())
                 {
                     if (_baselineAllInterfaceIndices.Contains(index)) continue;
 
                     // New adapter since baseline. Record it, then add to baseline so we alert once.
                     _baselineAllInterfaceIndices.Add(index);
 
-                    bool overlayVpn = IsOverlayVpnAdapterName(name);
+                    bool tunnel = VpnTunnelClassifier.IsTunnel(ifType, description);
+                    var metadata = new Dictionary<string, string>
+                    {
+                        ["AdapterName"] = name,
+                        ["AdapterDescription"] = description,
+                        ["InterfaceIndex"] = index.ToString(),
+                        ["InterfaceType"] = ifType.ToString(),
+                        ["Virtual"] = virt.ToString(),
+                        ["OverlayVpn"] = tunnel.ToString(),
+                        // Root observation = this specific new adapter, so it is one
+                        // independent tamper vector and cannot self-stack.
+                        [BehavioralCorrelationEngine.ObservationKeyMeta] = $"new-adapter:{index}"
+                    };
+                    if (tunnel) VpnTunnelClassifier.MarkTunnel(metadata);
+
                     _ = _detectionEngine.EmitAsync(new DetectionEvent
                     {
                         RuleName = "Network: New Adapter Appeared",
-                        Evidence = $"A network adapter not present at startup appeared: '{name}' " +
-                                   $"(InterfaceIndex {index}, {(virt ? "virtual" : "physical")}" +
-                                   $"{(overlayVpn ? ", overlay/VPN" : "")}).",
-                        Reasoning = "A new network adapter was added to the host after Sentinel started - a USB " +
-                                    "Ethernet dongle, an additional Wi-Fi NIC, or an overlay/VPN virtual adapter " +
-                                    "(WireGuard/Tailscale/OpenVPN). This is the on-host beginning of adding a second " +
-                                    "network path that an attacker could route or intercept traffic through. It is a " +
-                                    "legitimate admin action on its own (LogOnly observe), but combined with any ARP / " +
-                                    "DNS / route / gateway tamper it is an independent leg of a local man-in-the-middle " +
-                                    "chain and helps raise the protective VPN shield.",
-                        Confidence = overlayVpn ? 0.55 : 0.45,
+                        Evidence = $"A network adapter not present at startup appeared: '{name}' / '{description}' " +
+                                   $"(InterfaceIndex {index}, type {ifType}, {(virt ? "virtual" : "physical")}" +
+                                   $"{(tunnel ? ", VPN/overlay tunnel" : "")}).",
+                        Reasoning = tunnel
+                            ? "A VPN or overlay tunnel adapter was added after Sentinel started (for example a VPN " +
+                              "client installing or connecting). Recorded for context. A tunnel adapter is a host-side " +
+                              "path, not a man-in-the-middle on the LAN, so it does not count toward the local MitM chain."
+                            : "A new network adapter was added to the host after Sentinel started - a USB Ethernet " +
+                              "dongle or an additional Wi-Fi NIC. This is the on-host beginning of adding a second " +
+                              "network path that an attacker could route or intercept traffic through. It is a " +
+                              "legitimate admin action on its own (LogOnly observe), but combined with any ARP / DNS / " +
+                              "route / gateway tamper it is an independent leg of a local man-in-the-middle chain.",
+                        Confidence = tunnel ? 0.30 : 0.45,
                         Tier = DetectionTier.Tier2Indicator,
                         AuthorizedResponse = ResponseAction.LogOnly,
                         ProcessName = "SYSTEM",
                         ProcessId = 0,
                         SignalType = SignalType.Generic,
-                        Metadata = new Dictionary<string, string>
-                        {
-                            ["AdapterName"] = name,
-                            ["InterfaceIndex"] = index.ToString(),
-                            ["Virtual"] = virt.ToString(),
-                            ["OverlayVpn"] = overlayVpn.ToString(),
-                            // Root observation = this specific new adapter, so it is one
-                            // independent tamper vector and cannot self-stack.
-                            [BehavioralCorrelationEngine.ObservationKeyMeta] = $"new-adapter:{index}"
-                        }
+                        Metadata = metadata
                     });
 
-                    _logger.LogWarning("[NetworkInterfaceGuard] New network adapter appeared: '{Name}' (Index {Index}, virtual={Virtual}, overlayVpn={Overlay})",
-                        name, index, virt, overlayVpn);
+                    _logger.LogWarning("[NetworkInterfaceGuard] New network adapter appeared: '{Name}' / '{Description}' (Index {Index}, type {IfType}, virtual={Virtual}, tunnel={Tunnel})",
+                        name, description, index, ifType, virt, tunnel);
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "[NetworkInterfaceGuard] Error checking for new adapters");
             }
-        }
-
-        private static readonly string[] OverlayVpnNameFragments = new[]
-        {
-            "wireguard", "tailscale", "nordlynx", "openvpn", "tap-windows", "proton",
-            "cloudflare", "warp", "zerotier", "tunnel", "wintun", "vpn",
-        };
-
-        private static bool IsOverlayVpnAdapterName(string name)
-        {
-            if (string.IsNullOrEmpty(name)) return false;
-            var n = name.ToLowerInvariant();
-            return OverlayVpnNameFragments.Any(f => n.Contains(f));
         }
 
         private void BaselineDnsServers()

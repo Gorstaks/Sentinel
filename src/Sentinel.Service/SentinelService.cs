@@ -67,15 +67,12 @@ namespace Sentinel.Service
             ChainTracer chainTracer,
             SentinelOrchestrator orchestrator,
             MonitorRegistry monitorRegistry,
-            VpnShieldEngine vpnShieldEngine,
             SentinelEventLogWriter? windowsEventLog = null)
         {
             // Wire incident response into response engine (late binding to avoid circular DI)
             responseEngine.SetIncidentResponseService(incidentResponseService);
             responseEngine.SetDllUnloadEngine(dllUnloadEngine);
             responseEngine.SetChainTracer(chainTracer);
-            // v2.6.0: Wire the protective VPN-shield engine (network-tamper remediation)
-            responseEngine.SetVpnShieldEngine(vpnShieldEngine);
             // v1.6.1: budget-exhaustion Tier1 alerts
             responseEngine.SetDetectionEngine(detectionEngine);
 
@@ -450,7 +447,7 @@ namespace Sentinel.Service
         {
             // Use reflection to check private nullable fields that should be non-null after wiring
             var reType = typeof(AdvancedResponseEngine);
-            var fields = new[] { "_incidentResponse", "_dllUnloadEngine", "_chainTracer", "_vpnShieldEngine" };
+            var fields = new[] { "_incidentResponse", "_dllUnloadEngine", "_chainTracer" };
             foreach (var fieldName in fields)
             {
                 var field = reType.GetField(fieldName, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);

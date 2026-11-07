@@ -138,8 +138,8 @@ compiled types and behavior are unchanged:
   branch guards and pre-action audit) is in `AdvancedResponseEngine.cs`; the
   low-level network/certificate P/Invoke executors are in `AdvancedResponseEngine.NetworkActions.cs`.
 - **`BehavioralCorrelationEngine`** is a `partial class`: the per-PID composite cascade and shared
-  buffers/locks are in `BehavioralCorrelationEngine.cs`; the host-wide (PID 0) network-tamper /
-  VPN-shield subsystem is in `BehavioralCorrelationEngine.NetworkTamper.cs`.
+  buffers/locks are in `BehavioralCorrelationEngine.cs`; the host-wide (PID 0) network-tamper
+  report subsystem is in `BehavioralCorrelationEngine.NetworkTamper.cs`.
 
 ### v2.0 platform additions
 
@@ -155,7 +155,7 @@ compiled types and behavior are unchanged:
 | `SelfPathGuard` | Hardlink-aware install self-exclusion |
 | `EncryptedConfigStore` | DPAPI `config.enc` for Hardened Mode / victim identity only; cannot disable detection or rewrite compiled HMAC |
 | `ProductInfo.Version` | Stamped from `version.txt` (3.2.3) |
-| `VpnShieldEngine` + `VpnShieldConfig` | **v2.6.0.** Protective VPN-shield remediation for confirmed local network tampering (raise userland tunnel -> clean -> verify clean -> drop; fail-safe holds tunnel). New `ResponseAction.VpnShieldUp`; `ProductPosture.AllowsVpnShield` gate (default off) |
+| `VpnTunnelClassifier` | **3.6.8.** Replaces the retired `VpnShieldEngine`/`VpnShieldConfig` (GVPN is a separate project). Classifies VPN/overlay tunnel interfaces by IANA type or driver description so route/gateway/adapter/traffic monitors coexist with any VPN client; tunnel observations never feed the LAN MitM composite. `ResponseAction.VpnShieldUp` is an `[Obsolete]` numeric slot only |
 
 All components are wired via Microsoft.Extensions.DependencyInjection. No static mutable state anywhere.
 
@@ -289,6 +289,7 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 | `PublicIpMonitor` | Checks public IP via Cloudflare/ipify/icanhazip; detects geo/ASN shift | 5min |
 | `WifiSecurityMonitor` | Polls Wi-Fi state via netsh; detects deauth flood, open network, encryption downgrade | 15s |
 | `NetworkInterfaceGuard` | Removes bridges via SetupAPI, restores disabled adapters, observes IPv4/IPv6/effective DNS drift as Tier2 LogOnly; administrator-approved DNS repair is separate | 15s |
+| `VpnTunnelLeakMonitor` | **3.6.8.** Observe-only (Tier2/LogOnly, no mutation) VPN tunnel state and bypass: tunnel connected/disconnected, public IPv4 outside the tunnel, physical IPv6 next to an IPv4-only tunnel, resolvers left on physical adapters. OS state only; never reads a VPN client's user-writable log | 20s |
 | `WinsockLspIntegrityMonitor` | **v2.6.5.** Walks Winsock2 protocol/namespace catalogs; flags non-Microsoft/unsigned LSP provider DLLs, missing providers, and chain gaps. Tier1 LogOnly (never rewrites the catalog) | 10min |
 | `AppDnsExfilMonitor` | Detects non-browser processes connecting to known DoH resolvers on port 443 | 500ms |
 | `NetworkShareMonitor` | Monitors SMB shares, admin share access (C$/ADMIN$/IPC$), inbound sessions | 15s |

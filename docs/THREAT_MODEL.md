@@ -26,6 +26,10 @@ TLS heuristic emitters and the central executor both require explicit thumbprint
 
 See [pre-push red/blue review](AUDIT_3.4.5.md) and [source/migration limits](NANOAV.md).
 
+## Running next to a VPN client (3.6.8)
+
+Sentinel no longer raises, bundles or installs a VPN; GVPN is a separate project and any VPN client may run alongside. A VPN does not blind Sentinel's process/connection telemetry: ETW, the TCP/UDP owner tables and WFP net events observe sockets per process before the tunnel encrypts them. What changes with a VPN is the local path, so tunnel interfaces are classified (`VpnTunnelClassifier`) by IANA interface type or driver-supplied description, never the user-renamable connection name; Wi-Fi is never classified by description. Tunnel routes, gateways and adapters are recorded as Tier2 and tagged so they never become legs of the `Network Tamper: Local MitM Chain` composite, which is itself a LogOnly report. **Tradeoff:** a local administrator who installs a driver whose description looks like a VPN can make that interface's route/gateway/adapter observations count as tunnel context instead of LAN MitM legs (B1 ceiling - they could already change routes directly); ARP, DNS, bridge, WPAD and Wi-Fi legs are unaffected, and the tag is honoured only on host-wide PID 0-4 monitor events. `VpnTunnelLeakMonitor` reports, without mutating anything, a tunnel going down, public IPv4 routed outside the tunnel, a physical IPv6 path next to an IPv4-only tunnel, and resolvers left on physical adapters. It uses OS state only: a VPN client's log (for example GVPN's `vpn.log` under the user's AppData) is user-writable and is not read or trusted. Enforcement (a kill switch) belongs to the VPN client. Payload contents inside a tunnel and anything the VPN server does with the traffic remain outside Sentinel's view.
+
 ## Firewall defaults, policy stores, and monitoring (3.2.3)
 
 The service manages PersistentStore and, when the OS exposes it, the local computer Group Policy store (`localhost`). It mirrors Sentinel's own process blocks into local Group Policy and inspects ActiveStore, including rule filters, enforcement status, profile settings, and BFE/MpsSvc health. It never writes a domain GPO. Effective domain exceptions, disabled/overridden profiles, missing rules, or non-enforced filters produce visible conflicts and a dashboard attention state instead of a protected claim. A trimmed image without a local GPO store uses PersistentStore; missing NetSecurity/PowerShell means policy management is unavailable and is reported, while COM inbound-block reconciliation and local detection continue.
@@ -92,7 +96,8 @@ baselined physical adapters only to re-enable one that went *down*, never diffed
 and `RouteTableMonitor` deliberately excludes virtual adapters. Windows itself surfaces no
 user-visible event for a new adapter, so nothing recorded it. Now `NetworkInterfaceGuard` baselines
 the full adapter set (physical + virtual) at startup and emits **`Network: New Adapter Appeared`**
-(Tier2 / `LogOnly` observe-fuel, confidence 0.45 physical / 0.55 overlay-VPN, overlay/VPN flagged not
+(Tier2 / `LogOnly` observe-fuel, confidence 0.45; since 3.6.8 a VPN/overlay tunnel adapter is recorded at 0.30
+and tagged so it is not a MitM leg - see "Running next to a VPN client"; overlay/VPN flagged not
 excluded) for any adapter added afterwards. It is **never auto-removed** - a new dongle is a
 legitimate admin action. Its value is composition: the new-adapter signal and the pre-existing
 `Network: Default Gateway Changed` signal are now `IsNetworkTamperFuel` with distinct vector labels

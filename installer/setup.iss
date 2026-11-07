@@ -1,16 +1,16 @@
 [Setup]
 AppName=Sentinel
-AppVersion=3.6.7
+AppVersion=3.6.8
 AppPublisher=Gorstak
 AppPublisherURL=https://gorstak.eu
 AppCopyright=Copyright (C) 2026 Gorstak
-VersionInfoVersion=3.6.7.0
+VersionInfoVersion=3.6.8.0
 VersionInfoCompany=Gorstak
 VersionInfoDescription=Sentinel Endpoint Detection and Response Setup
 VersionInfoCopyright=Copyright (C) 2026 Gorstak
 VersionInfoProductName=Sentinel EDR
-VersionInfoProductVersion=3.6.7.0
-VersionInfoOriginalFileName=SentinelSetup-3.6.7.exe
+VersionInfoProductVersion=3.6.8.0
+VersionInfoOriginalFileName=SentinelSetup-3.6.8.exe
 SourceDir=.
 DefaultDirName={autopf}\Sentinel
 DefaultGroupName=Sentinel
@@ -20,7 +20,7 @@ UninstallDisplayIcon={app}\Sentinel.ico
 Compression=lzma/max
 SolidCompression=no
 OutputDir=.
-OutputBaseFilename=SentinelSetup-3.6.7
+OutputBaseFilename=SentinelSetup-3.6.8
 PrivilegesRequired=admin
 SetupMutex=Global\SentinelSetupMutex
 UsePreviousAppDir=yes
@@ -36,21 +36,20 @@ Source: "..\publish\service\*"; DestDir: "{app}"; Flags: ignoreversion recursesu
 Source: "..\publish\agent\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs uninsrestartdelete
 Source: "..\publish\autorotate\SentinelAutoRotate.exe"; DestDir: "{app}"; Flags: ignoreversion uninsrestartdelete
 Source: "..\publish\exploitshield\*"; DestDir: "{app}\ExploitShield"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\publish\gvpn\GVPN.exe"; DestDir: "{app}\GVPN"; Flags: ignoreversion uninsrestartdelete
-; Bundled OpenVPN 2.7.9 client + DCO driver (installed offline; see modules\GVPN\thirdparty\openvpn\README.txt).
-Source: "..\publish\gvpn\openvpn\*"; DestDir: "{app}\GVPN\openvpn"; Flags: ignoreversion recursesubdirs createallsubdirs uninsrestartdelete
 
 
 [InstallDelete]
+; GVPN is a separate project now. Remove the copy older Sentinel releases bundled in {app}\GVPN
+; (MigrateBundledGvpn stops it and removes its task/rules first) and its Start menu shortcut.
+Type: filesandordirs; Name: "{app}\GVPN"
+Type: files; Name: "{group}\GVPN.lnk"
 
 
 [Tasks]
 Name: "autorotate"; Description: "Enable SentinelAutoRotate for the account running this setup. Its password is set to blank at every boot and to a random value every 10 minutes while the account is signed in, so the password is unknown to everyone. Saved browser logins, Credential Manager entries and encrypted files can become unreadable, a locked session may only unlock after a restart, and services or tasks that use this account's password stop working. Leave unchecked unless you specifically want this."; Flags: unchecked
-Name: "gvpn"; Description: "Start GVPN now and at every sign-in of this account, with administrator rights. GVPN routes your traffic through public VPNGate servers run by volunteers and reconnects when the connection drops. Its optional kill switch blocks traffic that would bypass the VPN. Without this option GVPN is installed but only starts when you open it from the Start menu (it asks for administrator rights)."; Flags: unchecked
 
 [Icons]
 Name: "{group}\Sentinel Agent"; Filename: "{app}\Sentinel.Agent.exe"; IconFilename: "{app}\Sentinel.ico"
-Name: "{group}\GVPN"; Filename: "{app}\GVPN\GVPN.exe"; WorkingDir: "{app}\GVPN"
 
 [Run]
 Filename: "{app}\Sentinel.Service.exe"; Parameters: "--install"; Flags: runhidden waituntilterminated; StatusMsg: "Starting Sentinel..."
@@ -62,89 +61,131 @@ Type: filesandordirs; Name: "{commonpf32}\Sentinel"
 
 [Code]
 const
-  GvpnAdapterName = 'GVPN TAP';
   GvpnTaskName = 'GVPN';
 
-// Installs the bundled TAP-Windows6 driver and creates GVPN's adapter, offline, from
-// {app}\GVPN\openvpn. Replaces running the OpenVPN MSI, whose JScript custom actions fail
-// (error 2739) where the JScript engine is unavailable. TAP rather than DCO because VPNGate
-// servers only offer AES-128-CBC, which DCO cannot carry. Best-effort: a failure never blocks
-// Sentinel; GVPN logs the connection error instead.
-procedure InstallGvpnOpenVpnDriver();
-var
-  ResultCode: Integer;
-  OvpnDir: String;
+// ---------------------------------------------------------------------------------------------
+// GVPN migration. Sentinel releases up to 3.6.7 bundled GVPN in {app}\GVPN. GVPN is now a
+// separate project with its own installer, and it uses the SAME task name, firewall rule names
+// and adapter name as the bundled copy. So every step below acts only on what belongs to the
+// bundled copy (identified by its path under {app}\GVPN) and leaves a standalone GVPN alone.
+// ---------------------------------------------------------------------------------------------
+
+function BundledGvpnDir(): String;
 begin
-  OvpnDir := ExpandConstant('{app}\GVPN\openvpn');
+  Result := ExpandConstant('{app}\GVPN');
+end;
 
-  ResultCode := -1;
-  Exec(ExpandConstant('{sysnative}\pnputil.exe'), '/add-driver "' + OvpnDir + '\drivers\tap-windows6\OemVista.inf" /install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Log('GVPN: pnputil tap-windows6 driver exit ' + IntToStr(ResultCode));
+function IsUnderBundledGvpn(const Path: String): Boolean;
+begin
+  Result := (Path <> '') and
+    (Pos(Lowercase(AddBackslash(BundledGvpnDir())), Lowercase(Path)) = 1);
+end;
 
-  // Create the adapter only once; tapctl would otherwise add a second adapter on upgrade.
-  ResultCode := -1;
-  Exec(ExpandConstant('{sysnative}\netsh.exe'), 'interface show interface name="' + GvpnAdapterName + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  if ResultCode = 0 then
-    Log('GVPN: adapter "' + GvpnAdapterName + '" already exists')
-  else
-  begin
-    ResultCode := -1;
-    Exec(OvpnDir + '\bin\tapctl.exe', 'create --hwid root\tap0901 --name "' + GvpnAdapterName + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    Log('GVPN: tapctl create adapter exit ' + IntToStr(ResultCode));
+// Terminates GVPN.exe / openvpn.exe processes whose image lives under {app}\GVPN. Returns True
+// when a GVPN.exe from any OTHER location is running (a standalone install). taskkill /IM is not
+// used because it cannot filter by path and would also stop a standalone GVPN.
+function StopBundledGvpnProcesses(): Boolean;
+var
+  Locator, Services, Procs, P: Variant;
+  i: Integer;
+  ExePath, ExeName: String;
+begin
+  Result := False;
+  try
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Services := Locator.ConnectServer('.', 'root\CIMV2');
+    Procs := Services.ExecQuery('SELECT Name, ExecutablePath FROM Win32_Process WHERE Name = ''GVPN.exe'' OR Name = ''openvpn.exe''');
+    for i := 0 to Procs.Count - 1 do
+    begin
+      P := Procs.ItemIndex(i);
+      ExeName := Lowercase(P.Name);
+      ExePath := '';
+      if not VarIsNull(P.ExecutablePath) then
+        ExePath := P.ExecutablePath;
+      if IsUnderBundledGvpn(ExePath) then
+      begin
+        try
+          P.Terminate(0);
+          Log('GVPN migration: stopped bundled ' + ExePath);
+        except
+          Log('GVPN migration: could not stop ' + ExePath + ': ' + GetExceptionMessage);
+        end;
+      end
+      else if ExeName = 'gvpn.exe' then
+      begin
+        Result := True;
+        Log('GVPN migration: separate GVPN running from "' + ExePath + '"; left running.');
+      end;
+    end;
+  except
+    Log('GVPN migration: process enumeration failed: ' + GetExceptionMessage);
   end;
 end;
 
-function XmlEscape(const S: String): String;
-begin
-  Result := S;
-  StringChangeEx(Result, '&', '&amp;', True);
-  StringChangeEx(Result, '<', '&lt;', True);
-  StringChangeEx(Result, '>', '&gt;', True);
-end;
-
-// GVPN requires elevation (openvpn.exe configures the adapter and routes; the kill switch edits
-// firewall rules). A Run-key entry cannot start an elevated app, so a sign-in task with highest
-// privileges starts it for the account that ran setup, without a UAC prompt each time.
-// Registered through the Task Scheduler COM API with the XML passed as a string: schtasks /XML
-// only accepts UTF-16 files ("unable to switch the encoding" / "malformed" for UTF-8), and Inno
-// cannot write UTF-16 files.
-procedure RegisterGvpnSignInTask();
+// Deletes the "GVPN" sign-in task only when its action points at the bundled GVPN.exe.
+procedure RemoveBundledGvpnSignInTask();
 var
-  UserId, Xml: String;
   Service, Folder, Task: Variant;
+  Xml: String;
 begin
-  UserId := XmlEscape(GetEnv('USERDOMAIN') + '\' + GetUserNameString());
-  Xml :=
-    '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">' +
-    '<RegistrationInfo><Description>Starts GVPN, the Sentinel VPN manager, at sign-in.</Description></RegistrationInfo>' +
-    '<Triggers><LogonTrigger><Enabled>true</Enabled><UserId>' + UserId + '</UserId><Delay>PT10S</Delay></LogonTrigger></Triggers>' +
-    '<Principals><Principal id="Author"><UserId>' + UserId + '</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>' +
-    '<Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>' +
-    '<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Priority>7</Priority></Settings>' +
-    '<Actions Context="Author"><Exec><Command>' + XmlEscape(ExpandConstant('{app}\GVPN\GVPN.exe')) + '</Command>' +
-    '<WorkingDirectory>' + XmlEscape(ExpandConstant('{app}\GVPN')) + '</WorkingDirectory></Exec></Actions></Task>';
-
   try
     Service := CreateOleObject('Schedule.Service');
     Service.Connect();
     Folder := Service.GetFolder('\');
-    // 6 = TASK_CREATE_OR_UPDATE, 3 = TASK_LOGON_INTERACTIVE_TOKEN (no password stored).
-    Task := Folder.RegisterTask(GvpnTaskName, Xml, 6, Unassigned, Unassigned, 3, Unassigned);
-    Log('GVPN: sign-in task registered for ' + UserId);
-    // Start it now through the task so GVPN runs elevated in the user session, not as a child of setup.
-    Task.Run(Unassigned);
-    Log('GVPN: sign-in task started');
+    Task := Folder.GetTask(GvpnTaskName);
+    Xml := Task.Xml;
+    if Pos(Lowercase(AddBackslash(BundledGvpnDir()) + 'GVPN.exe'), Lowercase(Xml)) > 0 then
+    begin
+      Folder.DeleteTask(GvpnTaskName, 0);
+      Log('GVPN migration: removed sign-in task of the bundled copy.');
+    end
+    else
+      Log('GVPN migration: sign-in task "' + GvpnTaskName + '" belongs to a separate GVPN install; left in place.');
   except
-    Log('GVPN: sign-in task registration failed: ' + GetExceptionMessage);
-    SuppressibleMsgBox('GVPN could not be set to start at sign-in (' + GetExceptionMessage + '). Start it from the Start menu instead.', mbError, MB_OK, IDOK);
+    Log('GVPN migration: no sign-in task to remove.');
   end;
 end;
 
-procedure RemoveGvpnSignInTask();
+// Removes a previously bundled GVPN: stops it, removes its sign-in task and autostart value, and
+// removes its kill-switch firewall rules (a leftover block-all outbound rule would cut off the
+// network once GVPN.exe is gone). The kill-switch rules are kept when a separate GVPN is running,
+// because they then belong to it. The "GVPN TAP" adapter and the TAP driver are left in place:
+// a standalone GVPN reuses the same adapter name, and other OpenVPN installs share the driver.
+// Files under {app}\GVPN are removed by [InstallDelete] (upgrade) or [UninstallDelete].
+procedure MigrateBundledGvpn();
 var
-  ResultCode: Integer;
+  ResultCode, i: Integer;
+  Netsh, RunValue: String;
+  Rules: array of String;
+  SeparateGvpnRunning: Boolean;
 begin
-  Exec(ExpandConstant('{sysnative}\schtasks.exe'), '/Delete /TN "' + GvpnTaskName + '" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if not DirExists(BundledGvpnDir()) then
+    Exit;
+
+  Log('GVPN migration: bundled copy found at ' + BundledGvpnDir() + '; removing it (GVPN is now a separate project).');
+  SeparateGvpnRunning := StopBundledGvpnProcesses();
+  RemoveBundledGvpnSignInTask();
+
+  if RegQueryStringValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'GVPN', RunValue) and
+     (Pos(Lowercase(BundledGvpnDir()), Lowercase(RunValue)) > 0) then
+    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'GVPN');
+
+  if SeparateGvpnRunning then
+    Log('GVPN migration: kill-switch firewall rules left in place for the separate GVPN.')
+  else
+  begin
+    Netsh := ExpandConstant('{sysnative}\netsh.exe');
+    // Current kill-switch rule plus the rule names older GVPN builds created.
+    SetArrayLength(Rules, 5);
+    Rules[0] := 'GVPN Kill Switch';
+    Rules[1] := 'GVPN Allow OpenVPN';
+    Rules[2] := 'GVPN Allow Loopback';
+    Rules[3] := 'GVPN Allow DNS';
+    Rules[4] := 'GVPN Allow Sentinel';
+    for i := 0 to GetArrayLength(Rules) - 1 do
+      Exec(Netsh, 'advfirewall firewall delete rule name="' + Rules[i] + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Log('GVPN migration: kill-switch firewall rules removed.');
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -165,12 +206,6 @@ begin
       if (not Exec(ExpandConstant('{app}\SentinelAutoRotate.exe'), '--install --force', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)) or (ResultCode <> 0) then
         MsgBox('SentinelAutoRotate was not enabled. See ProgramData\Sentinel\AutoRotate\events.log. Sentinel itself is installed.', mbError, MB_OK);
     end;
-
-    InstallGvpnOpenVpnDriver();
-    if WizardIsTaskSelected('gvpn') then
-      RegisterGvpnSignInTask()
-    else
-      RemoveGvpnSignInTask();
   end;
 end;
 
@@ -304,8 +339,6 @@ begin
   if ResultCode <> 128 then Result := True;
   Exec(Taskkill, '/F /IM "SentinelAutoRotate.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   if ResultCode <> 128 then Result := True;
-  Exec(Taskkill, '/F /T /IM "GVPN.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  if ResultCode <> 128 then Result := True;
 end;
 
 // Stops every Sentinel service and agent process before files are copied. The service can
@@ -359,6 +392,10 @@ begin
 
   WaitForSentinelExit();
 
+  // Upgrade from a release that bundled GVPN: stop and unregister that copy before
+  // [InstallDelete] removes {app}\GVPN.
+  MigrateBundledGvpn();
+
   ResetInstallDirAcls(ExpandConstant('{app}'));
   ResetInstallDirAcls(ExpandConstant('{commonpf}\Sentinel'));
   ResetInstallDirAcls(ExpandConstant('{commonpf32}\Sentinel'));
@@ -405,8 +442,6 @@ begin
     Exec(Taskkill, '/F /IM "Sentinel.Agent.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     if ResultCode <> 128 then AnyRunning := True;
     Exec(Taskkill, '/F /IM "SentinelAutoRotate.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    if ResultCode <> 128 then AnyRunning := True;
-    Exec(Taskkill, '/F /T /IM "GVPN.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     if ResultCode <> 128 then AnyRunning := True;
     if not AnyRunning then
     begin
@@ -529,35 +564,6 @@ begin
   if Exec(Schtasks, '/Query /TN "SentinelAutoRotateStartup"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then Result := True;
 end;
 
-// Removes what GVPN leaves outside {app}: its kill-switch firewall rules (a leftover block-all
-// outbound rule would cut off the network after uninstall) and its per-user autostart value.
-// Call after the GVPN process has been killed. The VPN connection profile is left in place.
-procedure UninstallGvpnCleanup();
-var
-  ResultCode, i: Integer;
-  Netsh: String;
-  Rules: array of String;
-begin
-  Netsh := SysNative('netsh.exe');
-  // Current kill-switch rule plus the rule names older GVPN builds created.
-  SetArrayLength(Rules, 5);
-  Rules[0] := 'GVPN Kill Switch';
-  Rules[1] := 'GVPN Allow OpenVPN';
-  Rules[2] := 'GVPN Allow Loopback';
-  Rules[3] := 'GVPN Allow DNS';
-  Rules[4] := 'GVPN Allow Sentinel';
-  for i := 0 to GetArrayLength(Rules) - 1 do
-    Exec(Netsh, 'advfirewall firewall delete rule name="' + Rules[i] + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'GVPN');
-  RemoveGvpnSignInTask();
-
-  // Remove GVPN's own adapter. The TAP-Windows6 driver package stays: OpenVPN Connect or a
-  // separate OpenVPN install may share it.
-  if FileExists(ExpandConstant('{app}\GVPN\openvpn\bin\tapctl.exe')) then
-    Exec(ExpandConstant('{app}\GVPN\openvpn\bin\tapctl.exe'), 'delete "' + GvpnAdapterName + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Log('Sentinel: GVPN firewall rules, sign-in task, autostart value and adapter removed.');
-end;
-
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   ResultCode: Integer;
@@ -616,7 +622,9 @@ begin
       UninstallFallbackCleanup();
 
     KillSentinelProcesses();
-    UninstallGvpnCleanup();
+    // Only acts when a GVPN bundled by an older release is still under {app}\GVPN; a separate
+    // GVPN install is never touched.
+    MigrateBundledGvpn();
 
     // Legacy GSecurity IPsec policies may belong to the owner; a name is not ownership.
     // Remove only Sentinel's separately named firewall rule.

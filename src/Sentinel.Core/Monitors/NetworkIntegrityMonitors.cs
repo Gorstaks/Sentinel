@@ -329,6 +329,11 @@ namespace Sentinel.Core
             return results;
         }
 
+        /// <summary>
+        /// The LAN gateway: first up adapter with an IPv4 gateway, skipping loopback and VPN /
+        /// overlay tunnels. A tunnel's peer has no ARP entry, so baselining it would leave the
+        /// real LAN gateway unwatched and could put the static ARP lock on the wrong interface.
+        /// </summary>
         private static string? GetDefaultGateway()
         {
             try
@@ -336,8 +341,11 @@ namespace Sentinel.Core
                 foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
                 {
                     if (ni.OperationalStatus != OperationalStatus.Up) continue;
+                    if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+                    if (VpnTunnelClassifier.IsTunnel(ni)) continue;
                     var gw = ni.GetIPProperties().GatewayAddresses
-                        .FirstOrDefault(g => g.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
+                        .FirstOrDefault(g => g.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+                                             && !g.Address.Equals(IPAddress.Any));
                     if (gw != null) return gw.Address.ToString();
                 }
             }

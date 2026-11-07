@@ -69,7 +69,6 @@ namespace Sentinel.Core
                 "RemoveCert" => HasCertificateStores(),
                 "RemoveCertAndKillAdder" => HasCertificateStores() && Has("ProcessTree"),
                 "RemoveRegistryEntry" => Has("RegistryRemoval"),
-                "VpnShieldUp" => Has("VpnShield"),
                 "DismountVolume" => Has("IsoContainment"),
                 _ => false
             };

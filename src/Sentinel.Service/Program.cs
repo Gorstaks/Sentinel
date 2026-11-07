@@ -475,8 +475,6 @@ namespace Sentinel.Service
                     services.AddSingleton<ChainTracer>();
                     services.AddSingleton<DllUnloadEngine>();
                     services.AddSingleton<IncidentResponseService>();
-                    // v2.6.0: Protective VPN-shield remediation for confirmed network tampering
-                    services.AddSingleton<VpnShieldEngine>();
 
                     // Unified ETW Session - single session subscribing to 9 system providers
                     // Provides event-driven telemetry at ~50ms latency for all monitors
@@ -797,7 +795,8 @@ namespace Sentinel.Service
                             ("VoipSessionMonitor",              s => s.GetRequiredService<VoipSessionMonitor>()),
                             ("CovertMeshMonitor",               s => s.GetRequiredService<CovertMeshMonitor>()),
                             ("CovertWebhookMonitor",            s => s.GetRequiredService<CovertWebhookMonitor>()),
-                            ("WinsockLspIntegrityMonitor",      s => s.GetRequiredService<WinsockLspIntegrityMonitor>())
+                            ("WinsockLspIntegrityMonitor",      s => s.GetRequiredService<WinsockLspIntegrityMonitor>()),
+                            ("VpnTunnelLeakMonitor",            s => s.GetRequiredService<VpnTunnelLeakMonitor>())
                         );
                         return new MonitorGroup(
                             new MonitorGroupConfig
@@ -818,6 +817,8 @@ namespace Sentinel.Service
                     services.AddSingleton<WifiSecurityMonitor>();
                     services.AddSingleton<NetworkInterfaceGuard>();
                     services.AddSingleton<WinsockLspIntegrityMonitor>();
+                    // Observe-only VPN tunnel state / bypass monitor for hosts running a separate VPN client.
+                    services.AddSingleton<VpnTunnelLeakMonitor>();
                     services.AddSingleton<AppDnsExfilMonitor>();
                     services.AddSingleton<NetworkShareMonitor>();
                     services.AddSingleton<NetworkReinfectionDetector>();
