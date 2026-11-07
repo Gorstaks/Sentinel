@@ -27,7 +27,7 @@ namespace Sentinel.Tests
                 {
                     ProcessName = processName,
                     ProcessId = pid,
-                    ParentProcessName = parentProcessName,
+                    ParentProcessName = parentProcessName ?? string.Empty,
                     CommandLine = commandLine,
                     ImagePath = imagePath
                 }
