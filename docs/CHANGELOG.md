@@ -2,6 +2,8 @@
 
 ## [3.6.8] - 2026-11-07
 
+Removes the GVPN bundling added in 3.6.7 and the VPN shield. Sentinel now runs correctly next to GVPN or any other VPN client, with supporting build, CI and steering tweaks.
+
 ### Removed - VPN is no longer part of Sentinel
 - **GVPN is a separate project.** The installer no longer builds, ships, installs or autostarts GVPN or its bundled OpenVPN/TAP driver, and the "Start GVPN" setup task and Start-menu shortcut are gone. `installer/build.ps1` no longer builds `modules/GVPN`.
 - **Upgrade migration (path-checked):** a GVPN bundled by an older release in `{app}\GVPN` is stopped (by image path, not `taskkill /IM`), its sign-in task is removed only when it points at `{app}\GVPN\GVPN.exe`, its Run value only when it points there, and its kill-switch firewall rules only when no separate GVPN is running. `{app}\GVPN` is then removed. The `GVPN TAP` adapter and TAP driver are left for a standalone GVPN / other OpenVPN installs. Uninstall applies the same rules, so a standalone GVPN is never touched.
@@ -20,12 +22,50 @@
 ### Added
 - **`VpnTunnelLeakMonitor`** (NetworkIntegrity, 20 s, observe-only Tier2/LogOnly, no mutation): `VPN Tunnel: Connected` / `Disconnected`, `IPv4 Traffic Bypasses Tunnel`, `IPv6 Traffic Bypasses Tunnel`, `Resolver Outside Tunnel`. Reported once per tunnel session. Uses OS state only; GVPN's `vpn.log` is user-writable and is never read or trusted.
 
+### Build tooling
+- `installer/build.ps1` version stamping no longer truncates `.csproj` files. It skips files already at the target version, writes through a temp file and `File.Replace`, retries briefly on a lock, and refuses to build when a project file is empty. Previously `Set-Content` could leave `Sentinel.Service.csproj` at 0 bytes when another process held it ("Root element is missing").
+
 ### CI
-- Remove the "Verify legacy NanoAV migration" step from Build & Test and Release. It ran `installer/retire-nanoav.ps1`, which is gone because NanoAV coverage is integrated in Sentinel.Core and there is no separate runtime to retire; `tools/validation/WindowsNanoAvMigrationSmoke.ps1` is obsolete.
-- Fix CS8601 in `VbsScheduledTaskRuleTests` (nullable parent name passed to a non-nullable property) that failed the `-warnaserror` test build.
+- Remove the "Verify legacy NanoAV migration" step from Build & Test and Release, and delete `tools/validation/WindowsNanoAvMigrationSmoke.ps1`. It ran `installer/retire-nanoav.ps1`, which no longer exists: NanoAV coverage has been integrated in Sentinel.Core since 3.4.5 and there is no separate runtime to retire. `docs/NANOAV.md` marks the old migration paragraph as historical.
+- Fix CS8601 in `VbsScheduledTaskRuleTests`, which failed the `-warnaserror` test build. A nullable parent name was passed to the non-nullable `ProcessTelemetry.ParentProcessName`; it now uses `?? string.Empty`, the model's "no parent" value.
 
 ### Testing
 - New `NetworkTamperCompositeTests`, `VpnTunnelClassifierTests`, `VpnTunnelLeakMonitorTests`; `NetworkTamperFuelTests` extended with VPN-connect, tunnel-plus-LAN-tamper and PID-guard cases. `VpnShieldTests` retired.
+
+### Docs
+- Add the missing 3.6.7 changelog section, reconstructed from the release diff.
+
+### Agent steering
+- Add `.kiro/steering/project-state.md` (always included). It covers:
+  - searching `docs/CHANGELOG.md` before treating anything missing as a bug, or restoring or removing a component;
+  - current facts: NanoAV integrated in 3.4.5, GVPN separate since 3.6.8, the network-tamper composite is report-only;
+  - scope discipline;
+  - build, test and release rules: `-warnaserror` covers tests, do not re-run `release.ps1` after a manual bump, never claim unverified results.
+- `.kiro/steering/changelog.md` now says to load the changelog before restoring or removing components, and requires a section for every release.
+- Add workspace-level `E:\Gorstak\.kiro\steering\sentinel.md` (fileMatch `Sentinel/**`). It loads these rules when the workspace root is `E:\Gorstak`, where Sentinel's own steering is not picked up. That file sits outside this repository.
+
+## [3.6.7] - 2026-11-07
+
+Written after release from the v3.6.6..v3.6.7 diff (single commit `e151a3c`); the release shipped without a changelog section. Everything in this release except the allowlist entry was reverted in 3.6.8, when GVPN became a separate project.
+
+### Added
+- **Bundled GVPN (`modules/GVPN`)**, a VPNGate OpenVPN manager with tray UI, auto-reconnect/failover, kill switch and `ConfigSanitizer`, which rebuilds untrusted VPNGate configs from an allowlist.
+- **Bundled OpenVPN client and TAP-Windows6 driver** in `modules/GVPN/thirdparty/openvpn`. `installer/build.ps1` built GVPN on every run and staged it with OpenVPN under `publish\gvpn`. The build failed if any vendor binary lacked a valid Authenticode signature.
+- **Installer:**
+  - installed `{app}\GVPN` and a Start menu shortcut, plus the TAP driver and a `GVPN TAP` adapter (offline, via `pnputil`/`tapctl`);
+  - offered an optional "Start GVPN at sign-in" task, registered as an elevated, highest-privilege sign-in task;
+  - stopped GVPN on upgrade;
+  - on uninstall, removed GVPN's kill-switch firewall rules, autostart, sign-in task and adapter.
+- **`AppNetworkPolicyMonitor` allowlist:** added `GVPN` and `openvpn`. Allowlisting still requires a valid Authenticode signature (`IsVerifiedAllowlistProcess`).
+- **Docs:** GVPN integration notes (`GVPN_*.md`, `docs/GVPN_INTEGRATION.md`, module docs) and a GVPN section in `AGENTS.md`.
+
+### Changed
+- **VPN shield disabled:** `ProductPosture.AllowsVpnShield` always returned false, with GVPN as the replacement. The `VpnShieldUp` composite therefore stayed LogOnly.
+
+### Known issues (fixed in 3.6.8)
+- A VPN connecting after Sentinel started could produce a false `Network Tamper: Local MitM Chain`, and Tier1 route/gateway alerts with NetworkIsolate authority. GVPN/L2TP/RAS tunnels were not recognised as tunnels.
+- Upgrade and uninstall stopped GVPN by image name (`taskkill /IM GVPN.exe`) and removed the `GVPN` task, rules and adapter by name. This also affected a standalone GVPN using the same names.
+- No changelog entry, and no tests for the new installer paths.
 
 ## [3.6.6] - 2026-11-06
 
