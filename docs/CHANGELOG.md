@@ -1,5 +1,9 @@
 # Changelog
 
+## [3.6.9] - 2026-11-07
+
+- Hardened security policy (GSecurity.inf)
+
 ## [3.6.8] - 2026-11-07
 
 Removes the GVPN bundling added in 3.6.7 and the VPN shield. Sentinel now runs correctly next to GVPN or any other VPN client, with supporting build, CI and steering tweaks.
