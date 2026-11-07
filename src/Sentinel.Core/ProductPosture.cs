@@ -52,17 +52,12 @@ namespace Sentinel.Core
 
         /// <summary>
         /// v2.6.0: Protective VPN-shield remediation for confirmed local network tampering.
-        /// Explicit operator opt-in via <see cref="VpnShieldConfig.Enabled"/>. Raises a
-        /// temporary userland VPN tunnel while the network is cleaned, then drops it once the
-        /// path is verified clean. Non-kill, non-destructive to processes; does not enable
-        /// full kiosk lockdown.
+        /// DISABLED: Replaced with GVPN (Global VPN Manager) module for always-on VPN protection.
         /// </summary>
         public static bool AllowsVpnShield(SentinelConfig? config)
         {
-            return config != null
-                   && config.ActiveResponse
-                   && config.VpnShield != null
-                   && config.VpnShield.Enabled;
+            // VPN Shield is disabled - use GVPN instead
+            return false;
         }
     }
 }

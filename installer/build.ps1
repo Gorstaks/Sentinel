@@ -179,6 +179,19 @@ foreach ($target in @("service", "agent")) {
     Write-Host "Pruned *.pdb from $target\" -ForegroundColor Yellow
 }
 
+# 3d-GVPN. Build the GVPN module fresh and stage it for the installer.
+#     Built every time so a stale bin\Release\GVPN.exe can never ship.
+Write-Host "Building and staging GVPN module..." -ForegroundColor Yellow
+$GvpnBuild = Join-Path $PSScriptRoot "..\modules\GVPN\build.ps1"
+$GvpnExe = Join-Path $PSScriptRoot "..\modules\GVPN\bin\Release\GVPN.exe"
+$GvpnOut = Join-Path $PublishDir "gvpn"
+if (Test-Path $GvpnExe) { Remove-Item $GvpnExe -Force }
+& $GvpnBuild
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $GvpnExe)) { throw "GVPN build failed" }
+New-Item -ItemType Directory -Path $GvpnOut -Force | Out-Null
+Copy-Item $GvpnExe -Destination (Join-Path $GvpnOut "GVPN.exe") -Force
+Write-Host "Copied GVPN.exe -> publish\gvpn\" -ForegroundColor Yellow
+
 # 3e. Sign published binaries with Authenticode
 Write-Host "Signing published binaries..." -ForegroundColor Yellow
 $SignScript = Join-Path $PSScriptRoot "..\tools\sign-binaries.ps1"
@@ -190,6 +203,23 @@ if (Test-Path $SignScript) {
         Write-Warning "Binary signing encountered an issue: $_"
     }
 }
+
+# 3f. Stage the bundled OpenVPN client + DCO driver for GVPN (after signing, so the
+#     vendor-signed OpenVPN/Microsoft binaries are never re-signed). Setup installs these
+#     offline; nothing is downloaded at install time. Every file must carry a valid
+#     signature or the build fails, so a swapped or corrupted vendor file cannot ship.
+Write-Host "Staging bundled OpenVPN for GVPN..." -ForegroundColor Yellow
+$OpenVpnSrc = Join-Path $PSScriptRoot "..\modules\GVPN\thirdparty\openvpn"
+$OpenVpnOut = Join-Path $GvpnOut "openvpn"
+if (-not (Test-Path (Join-Path $OpenVpnSrc "bin\openvpn.exe"))) {
+    throw "Bundled OpenVPN missing at $OpenVpnSrc (see modules\GVPN\thirdparty\openvpn\README.txt)"
+}
+Get-ChildItem $OpenVpnSrc -Recurse -Include *.exe,*.dll,*.sys,*.cat | ForEach-Object {
+    $sig = Get-AuthenticodeSignature $_.FullName
+    if ($sig.Status -ne 'Valid') { throw "Bundled OpenVPN file has no valid signature: $($_.FullName) ($($sig.Status))" }
+}
+Copy-Item $OpenVpnSrc -Destination $OpenVpnOut -Recurse -Force
+Write-Host "Copied OpenVPN -> publish\gvpn\openvpn\" -ForegroundColor Yellow
 
 # 4. Locate Inno Setup Compiler
 Write-Host "Locating Inno Setup compiler..." -ForegroundColor Yellow

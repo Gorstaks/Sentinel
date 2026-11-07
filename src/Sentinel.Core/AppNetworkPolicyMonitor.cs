@@ -89,7 +89,11 @@ namespace Sentinel.Core
             "NVDisplay.Container", "nvcontainer",
             "RazerCentralService", "CorsairService",
             // Sentinel itself
-            "Sentinel.Service", "Sentinel.Agent"
+            "Sentinel.Service", "Sentinel.Agent",
+            // GVPN - VPN manager module and the OpenVPN client it drives to VPNGate servers.
+            // Allowlisting still requires a valid Authenticode signature (IsVerifiedAllowlistProcess):
+            // openvpn.exe is signed by OpenVPN Inc.; GVPN.exe only matches once release signing is in place.
+            "GVPN", "openvpn"
         };
 
         public AppNetworkPolicyMonitor(DetectionEngine detectionEngine, ProcessAncestryCache ancestryCache, SignerTrustService? signerTrust = null, ContextBus? contextBus = null)

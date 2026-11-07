@@ -1,0 +1,40 @@
+# Build artifacts
+bin/
+obj/
+*.exe
+*.dll
+*.pdb
+
+# Logs
+vpn.log
+*.log
+
+# Visual Studio
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln.docstates
+
+# Build outputs
+build-output.txt
+tools_output.txt
+tools_stderr.txt
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Bundled OpenVPN client + DCO driver ship with the installer; keep them tracked
+# despite the bin/ *.exe *.dll rules above.
+!thirdparty/openvpn/bin/
+!thirdparty/openvpn/**/*.exe
+!thirdparty/openvpn/**/*.dll
