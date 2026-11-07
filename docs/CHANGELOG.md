@@ -20,6 +20,10 @@
 ### Added
 - **`VpnTunnelLeakMonitor`** (NetworkIntegrity, 20 s, observe-only Tier2/LogOnly, no mutation): `VPN Tunnel: Connected` / `Disconnected`, `IPv4 Traffic Bypasses Tunnel`, `IPv6 Traffic Bypasses Tunnel`, `Resolver Outside Tunnel`. Reported once per tunnel session. Uses OS state only; GVPN's `vpn.log` is user-writable and is never read or trusted.
 
+### CI
+- Remove the "Verify legacy NanoAV migration" step from Build & Test and Release. It ran `installer/retire-nanoav.ps1`, which is gone because NanoAV coverage is integrated in Sentinel.Core and there is no separate runtime to retire; `tools/validation/WindowsNanoAvMigrationSmoke.ps1` is obsolete.
+- Fix CS8601 in `VbsScheduledTaskRuleTests` (nullable parent name passed to a non-nullable property) that failed the `-warnaserror` test build.
+
 ### Testing
 - New `NetworkTamperCompositeTests`, `VpnTunnelClassifierTests`, `VpnTunnelLeakMonitorTests`; `NetworkTamperFuelTests` extended with VPN-connect, tunnel-plus-LAN-tamper and PID-guard cases. `VpnShieldTests` retired.
 
