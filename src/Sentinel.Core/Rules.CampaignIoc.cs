@@ -23,16 +23,7 @@ namespace Sentinel.Core
         };
 
         // Known C2 domain substrings
-        private static readonly string[] MaliciousDomainPatterns = new[]
-        {
-            "pastebin.com/raw", "hastebin.com/raw",
-            "discord.com/api/webhooks", "discordapp.com/api/webhooks",
-            "api.telegram.org/bot", "hooks.slack.com",
-            "telegram-bot", "webhook.site", "interact.sh",
-            "requestbin.com", "canarytokens.com",
-            ".onion.", ".tor2web.",
-            "envell.xyz", "enveil.online", "uxtramine.org",
-        };
+        private static readonly string[] MaliciousDomainPatterns = IndicatorCatalog.List("campaignIoc.domainPatterns");
 
         public DetectionEvent? Evaluate(FusedTelemetryContext context)
         {

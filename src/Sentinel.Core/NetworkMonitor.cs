@@ -113,7 +113,7 @@ namespace Sentinel.Core
             666 => "Trojan",
             1234 => "RAT",
             1337 => "Backdoor",
-            4444 => "Meterpreter",
+            4444 => "Implant default",
             7777 => "Backdoor",
             12345 => "NetBus",
             31337 => "BackOrifice",

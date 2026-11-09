@@ -8,6 +8,7 @@ namespace Sentinel.Core
     [RuleCategory(DetectionCategory.SecurityEvasion)]
     public class NpmSupplyChainRule : IDetectionRule
     {
+        private static readonly string[] SuspiciousInstallMarkers = IndicatorCatalog.List("supplyChain.markers");
         public string Name => "NpmSupplyChainRule";
 
         public DetectionEvent? Evaluate(FusedTelemetryContext context)
@@ -37,12 +38,8 @@ namespace Sentinel.Core
                 return null;
 
             var cmd = pt.CommandLine?.ToLowerInvariant() ?? "";
-            bool suspicious =
-                cmd.Contains("http://") || cmd.Contains("https://") ||
-                cmd.Contains("frombase64string") || cmd.Contains("downloadstring") ||
-                cmd.Contains("iex") || cmd.Contains("invoke-expression") ||
-                cmd.Contains("invoke-webrequest") || cmd.Contains("curl ") ||
-                cmd.Contains("-enc") || cmd.Contains("hidden");
+            // Markers live in the compressed indicator resource (see IndicatorCatalog). Same ordinal matching.
+            bool suspicious = SuspiciousInstallMarkers.Any(cmd.Contains);
 
             if (!suspicious)
                 return null;

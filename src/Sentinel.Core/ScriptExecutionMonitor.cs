@@ -35,50 +35,8 @@ namespace Sentinel.Core
         private readonly HashSet<string> _knownScriptFiles = new(StringComparer.OrdinalIgnoreCase);
 
         // Malicious patterns in PowerShell script blocks
-        private static readonly string[] MaliciousPatterns = new[]
-        {
-            // AMSI bypass. Plaintext by design: C# folds "Amsi" + "ScanBuffer" back to the
-            // full literal in the compiled PE, so splitting was cosmetic - and ML AV scores
-            // the runtime-assembly PATTERN as evasion. A signed binary with plaintext
-            // detection signatures reads as a security product, not malware.
-            "AmsiInitFailed", "amsi.dll", "AmsiScanBuffer", "AmsiUtils",
-            "Set-MpPreference -DisableRealtimeMonitoring",
-            // Credential theft
-            "Invoke-Mimikatz", "sekurlsa::logonpasswords", "Get-Credential",
-            "System.Net.NetworkCredential", "ConvertFrom-SecureString",
-            "dpapi::masterkey", "lsadump::sam", "kerberos::list",
-            // Sentinel evasion - behavioral service-tamper commands only.
-            // NOTE: patterns are matched with string.Contains, so these are literal
-            // substrings (no regex). The bare product name "Sentinel" was removed
-            // because benign scripts that merely reference the product (e.g. the
-            // $env:ProgramData\Sentinel path, diagnostics, push.ps1) matched it and
-            // got their process tree killed. Only genuine attempts to stop/disable the
-            // Sentinel service match now.
-            "Stop-Service Sentinel", "Stop-Service -Name Sentinel",
-            "sc stop Sentinel", "sc.exe stop Sentinel",
-            "Set-Service Sentinel", "Set-Service -Name Sentinel",
-            // Download cradles
-            "Invoke-Expression", "IEX(", "iex(", "iex ",
-            "DownloadString", "DownloadFile", "Net.WebClient",
-            "Invoke-WebRequest", "Start-BitsTransfer",
-            "New-Object Net.Sockets.TCPClient",
-            // Execution
-            "Invoke-Command", "-EncodedCommand", "FromBase64String",
-            "Add-Type.*DllImport", "GetProcAddress", "VirtualAlloc",
-            "OpenProcess",
-            "WriteProcessMemory",
-            "CreateRemoteThread",
-            // Persistence
-            "New-ScheduledTask", "Register-ScheduledTask",
-            "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
-            // Webhook exfil (path visible in 4104; TLS on the wire is not)
-            "discord.com/api/webhooks",
-            "discordapp.com/api/webhooks",
-            "api.telegram.org/bot",
-            "hooks.slack.com",
-            "webhook.site",
-            "interact.sh",
-        };
+        // Indicator data lives in Indicators/indicators.txt (compressed resource); see IndicatorCatalog.
+        private static readonly string[] MaliciousPatterns = IndicatorCatalog.List("script.suspiciousContent");
 
         // Parent-child anomaly pairs: parent -> suspicious children
         private static readonly Dictionary<string, HashSet<string>> AnomalousParentChild = new(StringComparer.OrdinalIgnoreCase)
@@ -558,13 +516,12 @@ namespace Sentinel.Core
         /// pattern is a Stop/Set-Service command, so the self-referential false positive is
         /// gone while real shutdown attempts still escalate.
         /// </summary>
+        private static readonly string[] CriticalScriptMarkers = IndicatorCatalog.List("script.criticalMarkers");
+
         internal static bool IsCriticalScriptMatch(IReadOnlyList<string> matchedPatterns)
         {
-            return matchedPatterns.Any(p =>
-                p.Contains("Amsi") ||
-                p.Contains("Mimi") ||
-                p.Contains("sekurlsa") ||
-                p.Contains("Sentinel"));
+            // Ordinal (case-sensitive) Contains, as before.
+            return matchedPatterns.Any(p => CriticalScriptMarkers.Any(m => p.Contains(m)));
         }
 
         private static string GetProcessNameSafe(int pid)

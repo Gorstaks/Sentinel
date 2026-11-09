@@ -28,6 +28,8 @@ namespace Sentinel.Core
             return int.TryParse(apiName.Substring(EventIdPrefix.Length), out eventId);
         }
 
+        private static readonly string[] RemoteInjectionApiNames = IndicatorCatalog.List("threatIntel.remoteInjectionApis");
+
         public static bool IsRemoteInjection(string? apiName)
         {
             if (string.IsNullOrEmpty(apiName)) return false;
@@ -38,17 +40,9 @@ namespace Sentinel.Core
                 return false;
             }
 
-            return apiName!.IndexOf("VirtualAllocEx", StringComparison.OrdinalIgnoreCase) >= 0
-                || apiName.IndexOf("WriteProcessMemory", StringComparison.OrdinalIgnoreCase) >= 0
-                || apiName.IndexOf("NtWriteVirtualMemory", StringComparison.OrdinalIgnoreCase) >= 0
-                || apiName.IndexOf("NtAllocateVirtualMemory", StringComparison.OrdinalIgnoreCase) >= 0
-                || apiName.IndexOf("MapViewOfSection", StringComparison.OrdinalIgnoreCase) >= 0
-                || apiName.IndexOf("QueueUserAPC", StringComparison.OrdinalIgnoreCase) >= 0
-                || apiName.IndexOf("NtQueueApcThread", StringComparison.OrdinalIgnoreCase) >= 0
-                || apiName.IndexOf("SetThreadContext", StringComparison.OrdinalIgnoreCase) >= 0
-                || apiName.IndexOf("NtSetContextThread", StringComparison.OrdinalIgnoreCase) >= 0
-                || apiName.IndexOf("CreateRemoteThread", StringComparison.OrdinalIgnoreCase) >= 0
-                || apiName.IndexOf("RtlCreateUserThread", StringComparison.OrdinalIgnoreCase) >= 0;
+            // API names live in the compressed indicator resource (see IndicatorCatalog). Same
+            // ordinal ignore-case substring match.
+            return IndicatorCatalog.ContainsAny(apiName, RemoteInjectionApiNames);
         }
 
         public static string Describe(string? apiName)

@@ -8,6 +8,11 @@ namespace Sentinel.Core
 {
     public partial class BehavioralCorrelationEngine
     {
+        // User-visible composite name and its matching fragment, kept in the compressed indicator
+        // resource (see IndicatorCatalog). Text is unchanged: InfostealerChainTests pins it.
+        internal static readonly string CredentialHarvestRuleName = IndicatorCatalog.Text("rule.credentialHarvest");
+        private static readonly string CredentialHarvestFragment = IndicatorCatalog.Text("fragment.credentialHarvest");
+
         private readonly ConcurrentDictionary<int, List<DetectionEvent>> _signalBuffers = new();
         private Func<DetectionEvent, Task>? _emitCallback;
         private readonly Func<int, string?> _imagePathResolver;
@@ -246,10 +251,10 @@ namespace Sentinel.Core
             // (SensitiveFileAccessMonitor); it becomes kill-grade only here, correlated with C2.
             if (HasCredentialReadWithRemoteControl(currentSignals))
             {
-                await EmitCompositeAsync(pid, "Infostealer: Credential Access + Outbound", 0.95,
+                await EmitCompositeAsync(pid, CredentialHarvestRuleName, 0.95,
                     "A Kernel-File credential/session store read and confirmed C2 or reverse-shell evidence were observed in the same process lifetime.",
-                    "Infostealer kill chain: the process accessed credential material (browser Login Data / " +
-                    "Cookies / Local State, Discord sessions, or .ssh / .aws / cloud tokens), with independent " +
+                    "Credential-harvest kill chain: the process accessed credential material (browser password / " +
+                    "cookie / key stores, chat session stores, or .ssh / .aws / cloud tokens), with independent " +
                     "C2 or reverse-shell evidence in the same process lifetime. A watcher notification, read alone, or ordinary connection cannot complete this chain. " +
                     "This chain does not require LSASS access.",
                     tagCoercionToolkit: true);
@@ -858,7 +863,7 @@ namespace Sentinel.Core
 
             // Order: most specific terminal family first.
             if (Has("Ransomware") || Has("Mass-Encryption")) return SignalType.Ransomware;
-            if (Has("Credential") || Has("LSASS") || Has("Infostealer")) return SignalType.CredentialTheft;
+            if (Has("Credential") || Has("LSASS") || Has(CredentialHarvestFragment)) return SignalType.CredentialTheft;
             if (Has("Injection") || Has("Injected") || Has("In-Memory Implant") || Has("Fileless") ||
                 Has("Staged Module + Injection")) return SignalType.ProcessInjection;
             if (Has("Reverse Shell")) return SignalType.ReverseShell;

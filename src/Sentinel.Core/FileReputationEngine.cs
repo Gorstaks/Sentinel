@@ -34,33 +34,10 @@ namespace Sentinel.Core
         private readonly ConcurrentDictionary<string, Task<FileReputationResult>> _inFlight = new();
 
         // Import names compared against target PE import tables (not invoked by Sentinel).
-        // Plain literals - split-string Concat is an ML evasion heuristic (Kaspersky/Defender).
-        private static readonly HashSet<string> SuspiciousImports = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "VirtualAllocEx",
-            "WriteProcessMemory",
-            "CreateRemoteThread",
-            "NtMapViewOfSection",
-            "RtlCreateUserThread",
-            "QueueUserAPC",
-            "SetWindowsHookEx",
-            "NtUnmapViewOfSection",
-            "VirtualProtectEx",
-            "OpenProcess",
-            "ReadProcessMemory",
-            "NtQueryInformationProcess",
-            "AdjustTokenPrivileges",
-            "LookupPrivilegeValue",
-            "CryptEncrypt",
-            "CryptDecrypt",
-            "BCryptEncrypt",
-            "InternetOpen",
-            "HttpSendRequest",
-            "URLDownloadToFile",
-            "WinExec",
-            "ShellExecute",
-            "CreateProcess"
-        };
+        // Indicator data lives in Indicators/indicators.txt, deflated into the assembly (see IndicatorCatalog).
+        // Plaintext literals made the unsigned PE match stealer/RAT signatures; runtime string
+        // splitting is scored as evasion. A compressed data resource is neither. Do not reinline.
+        private static readonly HashSet<string> SuspiciousImports = IndicatorCatalog.Set("fileRep.suspiciousImports");
 
         private static readonly HashSet<string> HighRiskPaths = new(StringComparer.OrdinalIgnoreCase)
         {

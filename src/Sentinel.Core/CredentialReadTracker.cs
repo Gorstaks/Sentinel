@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace Sentinel.Core
@@ -13,21 +14,19 @@ namespace Sentinel.Core
         private readonly Dictionary<(int pid, ulong key), DateTime> _recent = new();
         private const int Capacity = 4096;
 
+        // Indicator data lives in Indicators/indicators.txt (compressed resource); see IndicatorCatalog.
+        // All values are lower-case and matched ordinally against the lower-cased path, as before.
+        private static readonly string[] SensitiveSuffixes = IndicatorCatalog.List("credRead.suffixes");
+        private static readonly string[] SshKeySuffixes = IndicatorCatalog.List("credRead.sshKeySuffixes");
+        private static readonly string[] ChatSessionStores = IndicatorCatalog.List("credRead.chatSessionStores");
+
         internal static bool IsSensitivePath(string path)
         {
             var p = path.Replace('/', '\\').ToLowerInvariant();
-            return IsWindowsVaultPath(p) || p.EndsWith("\\login data", StringComparison.Ordinal) ||
-                p.EndsWith("\\cookies", StringComparison.Ordinal) ||
-                p.EndsWith("\\logins.json", StringComparison.Ordinal) ||
-                p.EndsWith("\\key4.db", StringComparison.Ordinal) ||
-                p.EndsWith("\\local state", StringComparison.Ordinal) ||
-                p.EndsWith("\\.aws\\credentials", StringComparison.Ordinal) ||
-                p.EndsWith("\\.git-credentials", StringComparison.Ordinal) ||
-                (p.Contains("\\.ssh\\") && (p.EndsWith("\\id_rsa", StringComparison.Ordinal) ||
-                    p.EndsWith("\\id_ed25519", StringComparison.Ordinal))) ||
-                ((p.Contains("\\discord\\local storage\\leveldb\\") ||
-                  p.Contains("\\discordcanary\\local storage\\leveldb\\") ||
-                  p.Contains("\\discordptb\\local storage\\leveldb\\")) &&
+            return IsWindowsVaultPath(p) ||
+                SensitiveSuffixes.Any(s => p.EndsWith(s, StringComparison.Ordinal)) ||
+                (p.Contains("\\.ssh\\") && SshKeySuffixes.Any(s => p.EndsWith(s, StringComparison.Ordinal))) ||
+                (ChatSessionStores.Any(s => p.Contains(s)) &&
                  (p.EndsWith(".ldb", StringComparison.Ordinal) || p.EndsWith(".log", StringComparison.Ordinal)));
         }
 

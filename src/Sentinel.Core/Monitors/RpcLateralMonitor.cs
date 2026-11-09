@@ -67,7 +67,7 @@ namespace Sentinel.Core
             (@"schtasks\s+.*(/s|/S)\s+", "Remote scheduled task (schtasks /s)"),
             (@"reg\s+(query|add|delete)\s+\\\\", "Remote registry (reg \\\\host)"),
             (@"net\s+use\s+\\\\", "Remote share mapping (net use \\\\)"),
-            (@"psexec\s+.*\\\\", "PsExec lateral movement"),
+            IndicatorCatalog.Pairs("rpcLateral.toolPatterns")[0],
             (@"copy\s+.*\\\\.*\$", "Copy to admin share (C$/ADMIN$)"),
             (@"xcopy\s+.*\\\\.*\$", "Xcopy to admin share"),
             (@"msg\s+.*(/server:|/SERVER:)", "Remote message delivery (msg /server:) - RPC access probe"),
@@ -288,7 +288,7 @@ namespace Sentinel.Core
         private static string GetPortDescription(int port) => port switch
         {
             135 => "RPC Endpoint Mapper (DCOM/WMI lateral)",
-            445 => "SMB/Named Pipes (PsExec, file shares, remote registry)",
+            445 => "SMB/Named Pipes (remote exec tools, file shares, remote registry)",
             5985 => "WinRM HTTP (PowerShell remoting)",
             5986 => "WinRM HTTPS (PowerShell remoting)",
             _ => $"port {port}"

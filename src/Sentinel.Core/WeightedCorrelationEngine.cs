@@ -24,6 +24,12 @@ namespace Sentinel.Core
     /// </summary>
     public sealed class WeightedCorrelationEngine
     {
+        // Tool-named family fragments, kept in the compressed indicator resource (see IndicatorCatalog).
+        private static readonly string[] CredentialToolFragments = IndicatorCatalog.List("wce.credentialTools");
+        private static readonly string[] CredentialHarvestFragments = IndicatorCatalog.List("fragment.credentialHarvest");
+        private static readonly string[] ReverseShellToolFragments = IndicatorCatalog.List("wce.reverseShellTools");
+        private static readonly string[] LateralToolFragments = IndicatorCatalog.List("wce.lateralTools");
+
         private readonly ConcurrentDictionary<int, List<DetectionEvent>> _buffers = new();
         private readonly ConcurrentDictionary<int, DateTime> _lastEmit = new();
         private readonly WeightedCorrelationConfig _config;
@@ -358,10 +364,10 @@ namespace Sentinel.Core
             // Prefer terminal / high-signal families by name first
             if (ContainsAny(r, "BYOVD", "Vulnerable Driver", "kdmapper")) return "BYOVD";
             if (ContainsAny(r, "Token Theft", "Impersonat", "SeImpersonate", "Potato")) return "TokenTheft";
-            if (ContainsAny(r, "LSASS", "Credential Dump", "Mimikatz", "SAM hive", "DCSync")) return "Credential";
-            if (ContainsAny(r, "Sensitive File Access", "Infostealer")) return "Credential";
+            if (ContainsAny(r, "LSASS", "Credential Dump", "SAM hive", "DCSync") || ContainsAny(r, CredentialToolFragments)) return "Credential";
+            if (ContainsAny(r, "Sensitive File Access") || ContainsAny(r, CredentialHarvestFragments)) return "Credential";
             if (ContainsAny(r, "Archive of User Documents", "Data Staging")) return "Exfil";
-            if (ContainsAny(r, "Reverse Shell", "Bind Shell", "revshell", "meterpreter")) return "ReverseShell";
+            if (ContainsAny(r, "Reverse Shell", "Bind Shell", "revshell") || ContainsAny(r, ReverseShellToolFragments)) return "ReverseShell";
             if (ContainsAny(r, "Ransomware", "Shadow Copy", "Mass File Rename", "Bulk Encrypt")) return "Ransomware";
             if (ContainsAny(r, "Beacon", "C2", "Command-and-Control")) return "C2";
             if (ContainsAny(r, "Exfil", "DNS Tunnel", "DNS Exfil", "Data Staging")) return "Exfil";
@@ -370,7 +376,7 @@ namespace Sentinel.Core
             if (ContainsAny(r, "Persistence", "Scheduled Task", "Run Key", "Autorun", "WMI Subscription")) return "Persistence";
             if (ContainsAny(r, "Privilege", "UAC Bypass", "Elevated Process", "LegacyHive", "FudModule", "Dream Job", "Kernel Exploit Loader", "Installer EoP", "AlwaysInstallElevated", "Package Manager EoP")) return "PrivilegeEscalation";
             if (ContainsAny(r, "AMSI", "ETW", "Evasion", "Tamper", "Cloud Files", "ShieldBreak")) return "Evasion";
-            if (ContainsAny(r, "Lateral", "PsExec", "WinRM", "DCOM", "SMB Admin")) return "Lateral";
+            if (ContainsAny(r, "Lateral", "WinRM", "DCOM", "SMB Admin") || ContainsAny(r, LateralToolFragments)) return "Lateral";
             if (ContainsAny(r, "Screen Capture", "Webcam", "Desktop Duplication", "Surveillance", "Stalkerware")) return "Surveillance";
             if (ContainsAny(r, "DNS", "DGA")) return "Dns";
             if (ContainsAny(r, "Network", "Outbound", "Connection")) return "Network";

@@ -22,7 +22,7 @@ namespace Sentinel.Core
     ///       events inside a sliding window is the signal.
     ///
     ///   (b) Keylogger-hook / raw-input observation - see the honest limitation note on
-    ///       <see cref="EmitKeyloggerHeuristicAsync"/>: userland cannot reliably enumerate
+    ///       <see cref="EmitAutomatedInputHeuristicAsync"/>: userland cannot reliably enumerate
     ///       which processes have installed global input hooks or are polling raw input, so
     ///       instead of faking it with attacker-controllable name matching we emit the
     ///       strongest FEASIBLE behavioral heuristic - a sustained stream of injected input
@@ -59,7 +59,7 @@ namespace Sentinel.Core
         private const int InjectedBurstThreshold = 25;          // injected events ...
         private static readonly TimeSpan InjectedBurstWindow = TimeSpan.FromSeconds(3); // ... within this window
         private static readonly TimeSpan InjectedDedupInterval = TimeSpan.FromSeconds(60);
-        private static readonly TimeSpan ClipBankerSwapWindow = TimeSpan.FromSeconds(2);
+        private static readonly TimeSpan ClipboardSwapWindow = TimeSpan.FromSeconds(2);
         private static readonly TimeSpan ClipboardDedupInterval = TimeSpan.FromSeconds(60);
 
         // Sliding-window counters for injected input. Mutated only on the hook thread;
@@ -226,7 +226,7 @@ namespace Sentinel.Core
                 {
                     await Task.Delay(1000, ct).ConfigureAwait(false);
                     await EvaluateInjectedWindowsAsync().ConfigureAwait(false);
-                    await EmitKeyloggerHeuristicAsync().ConfigureAwait(false);
+                    await EmitAutomatedInputHeuristicAsync().ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException)
@@ -493,22 +493,22 @@ namespace Sentinel.Core
         // reliable) is the runtime footprint of headless automation / scripted replay that a
         // keylogger-and-replay toolkit produces. This is Tier2/LogOnly observe-fuel.
         private long _lastReportedInjectedTotal;
-        private DateTime _lastKeyloggerHeuristicAlert = DateTime.MinValue;
+        private DateTime _lastAutomatedInputAlert = DateTime.MinValue;
         private const long SustainedInjectionThreshold = 300; // cumulative injected events ...
-        private static readonly TimeSpan KeyloggerHeuristicDedup = TimeSpan.FromMinutes(5);
+        private static readonly TimeSpan AutomatedInputDedup = TimeSpan.FromMinutes(5);
 
-        private async Task EmitKeyloggerHeuristicAsync()
+        private async Task EmitAutomatedInputHeuristicAsync()
         {
             long total = Interlocked.Read(ref _injectedKeyTotal) + Interlocked.Read(ref _injectedMouseTotal);
             var now = DateTime.UtcNow;
 
             if (total - _lastReportedInjectedTotal >= SustainedInjectionThreshold &&
-                now - _lastKeyloggerHeuristicAlert > KeyloggerHeuristicDedup)
+                now - _lastAutomatedInputAlert > AutomatedInputDedup)
             {
-                _lastKeyloggerHeuristicAlert = now;
+                _lastAutomatedInputAlert = now;
                 _lastReportedInjectedTotal = total;
 
-                await _detectionEngine.EmitAsync(BuildKeyloggerHeuristicEvent(total)).ConfigureAwait(false);
+                await _detectionEngine.EmitAsync(BuildAutomatedInputEvent(total)).ConfigureAwait(false);
             }
         }
 
@@ -516,7 +516,7 @@ namespace Sentinel.Core
         /// Pure factory for the keylogger/replay heuristic event. Exposed internally for the
         /// Tier2/LogOnly contract test.
         /// </summary>
-        internal static DetectionEvent BuildKeyloggerHeuristicEvent(long total)
+        internal static DetectionEvent BuildAutomatedInputEvent(long total)
         {
             return new DetectionEvent
             {
@@ -525,9 +525,9 @@ namespace Sentinel.Core
                                $"(current total {total}), consistent with headless automation or scripted input replay.",
                     Reasoning = "Userland cannot reliably enumerate installed global input hooks or raw-input pollers " +
                                 "(no supported API returns a hook's owning process, and a PE-import name match is " +
-                                "attacker-controllable), so no name-based keylogger detector is shipped. This heuristic " +
+                                "attacker-controllable), so no name-based input-capture detector is shipped. This heuristic " +
                                 "instead reports the reliably-observable runtime footprint - a sustained stream of " +
-                                "OS-flagged injected input - that scripted keylogger-replay / automation toolkits leave. " +
+                                "OS-flagged injected input - that scripted input-replay / automation toolkits leave. " +
                                 "Observe-fuel only; benign automation also produces this, and the source process is not " +
                                 "attributable from the hook, so this chains rather than acts.",
                     Confidence = 0.40,
@@ -556,7 +556,7 @@ namespace Sentinel.Core
             // crypto-address swap pattern. We observe timing only - never read or exfiltrate
             // clipboard contents ourselves.
             var now = DateTime.UtcNow;
-            if (now - _lastClipboardChange <= ClipBankerSwapWindow)
+            if (now - _lastClipboardChange <= ClipboardSwapWindow)
             {
                 _clipboardChangesInSwapWindow++;
                 if (_clipboardChangesInSwapWindow >= 1 &&
@@ -566,7 +566,7 @@ namespace Sentinel.Core
                     double gapMs = (now - _lastClipboardChange).TotalMilliseconds;
                     // Fire-and-forget onto the thread pool so the WndProc returns immediately;
                     // ConfigureAwait(false) keeps it off the Agent STA context.
-                    _ = EmitClipBankerAsync(gapMs);
+                    _ = EmitClipboardSwapAsync(gapMs);
                 }
             }
             else
@@ -576,15 +576,15 @@ namespace Sentinel.Core
             _lastClipboardChange = now;
         }
 
-        private async Task EmitClipBankerAsync(double gapMs)
+        private async Task EmitClipboardSwapAsync(double gapMs)
         {
             try
             {
-                await _detectionEngine.EmitAsync(BuildClipBankerEvent(gapMs)).ConfigureAwait(false);
+                await _detectionEngine.EmitAsync(BuildClipboardSwapEvent(gapMs)).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "[InputIntegrityGuard] ClipBanker emit error");
+                _logger.LogDebug(ex, "[InputIntegrityGuard] Clipboard swap emit error");
             }
         }
 
@@ -592,14 +592,14 @@ namespace Sentinel.Core
         /// Pure factory for the ClipBanker write-replace event. Exposed internally for the
         /// Tier2/LogOnly contract test.
         /// </summary>
-        internal static DetectionEvent BuildClipBankerEvent(double gapMs)
+        internal static DetectionEvent BuildClipboardSwapEvent(double gapMs)
         {
             return new DetectionEvent
             {
-                RuleName = "Input Integrity: Clipboard Write-Replace (ClipBanker Pattern)",
+                RuleName = "Input Integrity: Clipboard Write-Replace (Address-Swap Pattern)",
                     Evidence = $"Clipboard contents changed twice within {gapMs:F0}ms - a copy immediately followed " +
                                "by a programmatic overwrite.",
-                    Reasoning = "A rapid write-after-write on the clipboard is the signature of ClipBanker malware, which " +
+                    Reasoning = "A rapid write-after-write on the clipboard is the signature of clipboard address-swap malware, which " +
                                 "watches for a copied value (e.g. a crypto wallet address) and silently replaces it with " +
                                 "the attacker's own before the user pastes. This is observe-fuel only: fast double-copies " +
                                 "also occur with clipboard managers and sync tools, and the clipboard-format-listener does " +

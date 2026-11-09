@@ -48,14 +48,7 @@ namespace Sentinel.Core
             SignalType.PhantomKeystroke
         };
 
-        private static readonly string[] AttackRuleKeywords =
-        {
-            "ransomware", "cuckoo", "injection", "reverse shell", "credential", "lsass",
-            "beacon", "exfil", "c2", "dump", "mimikatz", "cobalt", "lateral", "token theft",
-            "shadow copy", "uac bypass", "persistence", "rootkit", "keylog", "clipbanker",
-            "process hollowing", "dll sideload", "supply chain", "reinfection", "malware",
-            "stalkerware", "surveillance", "remote control", "session theft", "webcam", "screen capture"
-        };
+        private static readonly string[] AttackRuleKeywords = IndicatorCatalog.List("incident.attackKeywords");
 
         private static readonly Regex Sha256Regex = new(
             @"\b[a-fA-F0-9]{64}\b", RegexOptions.Compiled);

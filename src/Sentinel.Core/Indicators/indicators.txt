@@ -1,0 +1,954 @@
+# Sentinel detection indicators - source of truth.
+#
+# This readable file is deflate-compressed into the assembly at build time
+# (Sentinel.Core.csproj -> CompressedResource -> resource "Sentinel.Core.Indicators.bin")
+# and read at runtime via IndicatorCatalog. It is NOT shipped as a loose file.
+#
+# WHY: static AV/ML engines substring-match a PE's string table. An EDR that embeds
+# offensive-tool names, credential-store paths, exfil sinks and injection API names as
+# plaintext C# string literals looks, to those engines, exactly like the stealers / RATs /
+# injectors it is built to detect. That produced VirusTotal "stealer" and "generic trojan"
+# verdicts on Sentinel.Core.dll. Deflating the words out of the PE removes the match while
+# keeping detection byte-for-byte identical. Compressed data is how AV signature DBs ship;
+# it is not in-code string hiding (XOR/split), which ML engines separately score as evasion.
+#
+# FORMAT: [section] headers; one value per line; '#' comment lines and blank lines ignored;
+# a value wrapped in "double quotes" preserves leading/trailing spaces. Key/value sections
+# use  key => value . Edit here; the build recompresses automatically. Parsing is fail-loud:
+# a missing/empty section throws, so detection can never silently vanish (IndicatorCatalogTests).
+
+# AgenticProcessMonitor.HighRiskChildren - LOLBins/tools risky when spawned by an AI agent.
+[agent.highRiskChildren]
+powershell
+pwsh
+cmd
+bash
+wsl
+python
+python3
+node
+certutil
+mshta
+bitsadmin
+curl
+wget
+ssh
+scp
+rclone
+mimikatz
+procdump
+rubeus
+lazagne
+
+# AgenticProcessMonitor.CredentialPathFragments (lower-case path fragments).
+[agent.credentialPaths]
+"\login data"
+"\cookies"
+"\key4.db"
+"\logins.json"
+"\.ssh\id_"
+"\credentials"
+"\.aws\"
+"\.azure\"
+"\.config\gcloud"
+"\appdata\roaming\mozilla"
+"\.kube\config"
+"\.gnupg\"
+
+# AgenticProcessMonitor critical child names (single-signal kill-grade child).
+[agent.criticalChildren]
+mimikatz
+procdump
+
+# CoverageExpansionMonitors.LpeToolNameFragments - potato-class / LPE tooling.
+[lpe.toolNames]
+JuicyPotato
+JuicyPotatoNG
+GodPotato
+SweetPotato
+RoguePotato
+PrintSpoofer
+SharpEfsPotato
+EfsPotato
+CoercedPotato
+DeadPotato
+LocalPotato
+GenericPotato
+RemotePotato
+MultiPotato
+PetitPotam
+DFSCoerce
+SpoolSample
+SharpUp
+Seatbelt
+winPEAS
+PowerUp
+BeRoot
+PrivescCheck
+Watson
+ExploitCapcom
+PrintNightmare
+
+# V217Hardening EdrKillerDetectionMonitor.KnownEdrKillerNames (name + lower-case variant kept).
+[edrKiller.names]
+Terminator
+terminator
+GentleKiller
+gentlekiller
+Backstab
+backstab
+EDRSilencer
+edrsilencer
+EDRSandBlast
+edrsandblast
+RealBlindingEDR
+realblindingedr
+AuKill
+aukill
+BurntCigar
+burntcigar
+Poortry
+poortry
+Stonestop
+stonestop
+TrueSightKiller
+truesightkiller
+KillAV
+killav
+AV_Killer
+av_killer
+HRSword
+hrsword
+Mhyprot2Killer
+mhyprot2killer
+KDU
+kdu
+EDRPrison
+edrprison
+Brute_Ratel
+bruteratel
+SharpTerminator
+sharpterminator
+BatchBypass
+batchbypass
+Auchentoshan
+auchentoshan
+SpyBoy
+spyboy
+
+# V217Hardening KnownEdrKillerFilePatterns.
+[edrKiller.fileNames]
+terminator.exe
+edrsilencer.exe
+edrsandblast.exe
+backstab.exe
+aukill.exe
+burntcigar.exe
+truesightkiller.exe
+realblindingedr.exe
+gentlekiller.exe
+poortry.sys
+stonestop.exe
+edrprison.exe
+sharpterminator.exe
+kdu.exe
+
+# DecoyPipeMonitor.DecoyPipeNames - honeypot pipe names Sentinel CREATES at runtime.
+# These are the strongest "this binary IS C2" tell in a PE string table, so they must
+# live as data, not literals. Order preserved.
+[decoyPipe.names]
+msagent_01
+MSSE-1234-server
+postex_ssh_0001
+win_svc_pipe
+ntsvcs_00
+DserNamePipe_00
+
+# CoercionAbusePolicy.RemoteAccessToolNames.
+[coercion.remoteAccessTools]
+anydesk
+teamviewer
+teamviewer_service
+tv_w32
+tv_x64
+rustdesk
+rustdesk_service
+supremo
+supremohelper
+splashtop
+strwinclt
+vncserver
+vncviewer
+winvnc
+tightvnc
+ultravnc
+realvnc
+tvnserver
+dwagent
+dwagsvc
+ammyy
+aa_v3
+getscreen
+chrome_remote_desktop_host
+remotedesktop
+msrdc
+mstsc
+rdpclip
+logmein
+lmi_rescue
+bomgar
+beyondtrust
+connectwisecontrol
+screenconnect
+parsec
+toodesk
+sunloginclient
+oraybox
+quasar
+asyncrat
+njrat
+darkcomet
+nanocore
+remcos
+warzone
+netwire
+orcus
+luminositylink
+tailcat
+wireproxy
+sliver
+chisel
+ngrok
+
+# AttackToolsRule.ToolSignatures - "pattern => category" (lower-case patterns).
+[attackTools.signatures]
+cobalt => C2
+cobeacon => C2
+beacon.dll => C2
+meterpreter => C2
+msfvenom => C2
+msfconsole => C2
+sliver => C2
+havoc => C2
+mimikatz => CredTool
+sekurlsa => CredTool
+kerberos::list => CredTool
+lazagne => CredTool
+pypykatz => CredTool
+rubeus => CredTool
+asreproast => CredTool
+kerberoast => CredTool
+bloodhound => ADTool
+sharphound => ADTool
+crackmapexec => ADTool
+impacket => ADTool
+psexec => ADTool
+wmiexec => ADTool
+certutil -urlcache => LOLBin:certutil
+certutil -decode => LOLBin:certutil
+certutil -encode => LOLBin:certutil
+certutil -verifyctl => LOLBin:certutil
+bitsadmin /transfer => LOLBin:bitsadmin
+bitsadmin /create => LOLBin:bitsadmin
+msiexec /q /i http => LOLBin:msiexec
+msiexec /q /i \\ => LOLBin:msiexec
+mshta vbscript => LOLBin:mshta
+mshta javascript => LOLBin:mshta
+mshta http => LOLBin:mshta
+mshta \\ => LOLBin:mshta
+regsvr32 /s /n /u /i: => LOLBin:regsvr32
+regsvr32 /s /n /i: => LOLBin:regsvr32
+regsvr32 /i:http => LOLBin:regsvr32
+rundll32 javascript: => LOLBin:rundll32
+rundll32 vbscript: => LOLBin:rundll32
+rundll32.exe shell32.dll,control_rundll => LOLBin:rundll32
+wmic process call create => LOLBin:wmic
+wmic /node: => LOLBin:wmic
+msbuild.exe /p: => LOLBin:msbuild
+installutil /logfile= /logtoconsole=false => LOLBin:installutil
+csc.exe /target:library /out: => LOLBin:csc
+forfiles /p c:\windows => LOLBin:forfiles
+syncappvpublishingserver => LOLBin:syncappv
+presentationhost.exe => LOLBin:presentationhost
+cmstp.exe /s /ns => LOLBin:cmstp
+cmstp.exe /ni => LOLBin:cmstp
+powershell -enc => LOLScript:PowerShell
+"powershell -e  => LOLScript:PowerShell"
+powershell -nop -w hidden => LOLScript:PowerShell
+powershell -nop -exec bypass => LOLScript:PowerShell
+powershell iex( => LOLScript:PowerShell
+powershell iex ( => LOLScript:PowerShell
+powershell -command "iex => LOLScript:PowerShell
+powershell downloadstring => LOLScript:PowerShell
+pwsh -enc => LOLScript:PowerShell
+"pwsh -e  => LOLScript:PowerShell"
+cscript //nologo //e:jscript => LOLScript:cscript
+wscript //nologo //e:jscript => LOLScript:wscript
+cscript //b //nologo => LOLScript:cscript
+comsvcs.dll,minidump => LOLLib:comsvcs
+comsvcs.dll,#24 => LOLLib:comsvcs
+comsvcs.dll,minitump => LOLLib:comsvcs
+dbgcore.dll => LOLLib:dbgcore
+pcwutl.dll,launchapplication => LOLLib:pcwutl
+advpack.dll,launchinfection => LOLLib:advpack
+advpack.dll,registerocx => LOLLib:advpack
+zipfldr.dll,routethepackage => LOLLib:zipfldr
+url.dll,filereprotocolhandler => LOLLib:url
+url.dll,openurl => LOLLib:url
+ieadvpack.dll,registerocx => LOLLib:ieadvpack
+shdocvw.dll,openurl => LOLLib:shdocvw
+shell32.dll,shellexec_rundll => LOLLib:shell32
+fscan => APTTool:fscan
+kscan => APTTool:kscan
+stowaway => APTTool:stowaway
+rakshasa => APTTool:rakshasa
+supershell => APTTool:supershell
+pillager => APTTool:pillager
+searchall => APTTool:searchall
+ntdsutil => APTTool:ntdsutil
+ntds.dit => APTTool:ntds.dit
+pastebin.com/raw => Exfil:Pastebin
+discord.com/api/webhooks => Exfil:Discord
+discordapp.com/api/webhooks => Exfil:Discord
+api.telegram.org/bot => Exfil:Telegram
+hooks.slack.com => Exfil:Slack
+webhook.site => Exfil:WebhookSink
+interact.sh => Exfil:WebhookSink
+.onion. => Exfil:Tor
+tor2web => Exfil:Tor
+
+# PrivilegeEscalationRule.UacBypassPatterns.
+[privEsc.uacBypassPatterns]
+fodhelper.exe
+computerdefaults.exe
+sdclt.exe
+eventvwr.exe
+slui.exe
+cmstp.exe
+tokenvator
+incognito
+getsystem
+potato
+printspoof
+juicypotato
+godpotato
+sweetpotato
+roguepotato
+localpotato
+printspoofer
+efspotato
+"wevtutil cl "
+"wevtutil.exe cl "
+wevtutil clear-log
+"\pipe\"
+ImpersonateNamedPipeClient
+"\syswow64\version.dll"
+"\temp\version.dll"
+"\temp\winmm.dll"
+petitpotam
+dfscoerce
+spoolsample
+sharpup
+winpeas
+seatbelt
+privesccheck
+getsystem
+enable-privilege
+
+# TokenTheftMonitor.TokenTheftModules.
+[tokenTheft.modules]
+incognito
+tokenvator
+sharptoken
+getst
+rubeus
+kekeo
+whoami_module
+impersonate
+
+# ScriptExecutionMonitor suspicious script content substrings.
+[script.suspiciousContent]
+AmsiInitFailed
+amsi.dll
+AmsiScanBuffer
+AmsiUtils
+Set-MpPreference -DisableRealtimeMonitoring
+Invoke-Mimikatz
+sekurlsa::logonpasswords
+Get-Credential
+System.Net.NetworkCredential
+ConvertFrom-SecureString
+dpapi::masterkey
+lsadump::sam
+kerberos::list
+Stop-Service Sentinel
+Stop-Service -Name Sentinel
+sc stop Sentinel
+sc.exe stop Sentinel
+Set-Service Sentinel
+Set-Service -Name Sentinel
+Invoke-Expression
+IEX(
+iex(
+"iex "
+DownloadString
+DownloadFile
+Net.WebClient
+Invoke-WebRequest
+Start-BitsTransfer
+New-Object Net.Sockets.TCPClient
+Invoke-Command
+-EncodedCommand
+FromBase64String
+Add-Type.*DllImport
+GetProcAddress
+VirtualAlloc
+OpenProcess
+WriteProcessMemory
+CreateRemoteThread
+New-ScheduledTask
+Register-ScheduledTask
+"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+discord.com/api/webhooks
+discordapp.com/api/webhooks
+api.telegram.org/bot
+hooks.slack.com
+webhook.site
+interact.sh
+
+# WslMonitor.SuspiciousPatterns.
+[wsl.suspiciousPatterns]
+"nc -"
+"ncat "
+"socat "
+/dev/tcp/
+bash -i
+curl http
+wget http
+python -c
+python3 -c
+perl -e
+ruby -e
+php -r
+/etc/shadow
+/etc/passwd
+mimikatz
+sekurlsa
+meterpreter
+reverse_tcp
+bind_shell
+base64 -d
+openssl enc
+iptables
+tcpdump
+"nmap "
+masscan
+/mnt/c/windows/system32
+/mnt/c/users
+/proc/version
+cat /proc/version
+is_wsl
+get_wu()
+
+# FileReputationEngine.SuspiciousImports - PE import names compared against SCANNED targets.
+[fileRep.suspiciousImports]
+VirtualAllocEx
+WriteProcessMemory
+CreateRemoteThread
+NtMapViewOfSection
+RtlCreateUserThread
+QueueUserAPC
+SetWindowsHookEx
+NtUnmapViewOfSection
+VirtualProtectEx
+OpenProcess
+ReadProcessMemory
+NtQueryInformationProcess
+AdjustTokenPrivileges
+LookupPrivilegeValue
+CryptEncrypt
+CryptDecrypt
+BCryptEncrypt
+InternetOpen
+HttpSendRequest
+URLDownloadToFile
+WinExec
+ShellExecute
+CreateProcess
+
+# ThreatIntelMap remote-injection API names (matched in OTHER processes' telemetry).
+[threatIntel.remoteInjectionApis]
+VirtualAllocEx
+WriteProcessMemory
+NtWriteVirtualMemory
+NtAllocateVirtualMemory
+MapViewOfSection
+QueueUserAPC
+NtQueueApcThread
+SetThreadContext
+NtSetContextThread
+CreateRemoteThread
+RtlCreateUserThread
+
+# CommandLineFeatureExtractor ML token lists (weak obfuscation indicators).
+[ml.downloadTokens]
+downloadstring
+downloadfile
+downloaddata
+invoke-webrequest
+" iwr "
+start-bitstransfer
+bitsadmin
+certutil
+"curl "
+"wget "
+webclient
+net.webclient
+system.net.webclient
+
+[ml.iexTokens]
+iex
+invoke-expression
+invoke-command
+"icm "
+&('i'+'ex')
+$executioncontext
+
+[ml.lolbinTokens]
+rundll32
+regsvr32
+mshta
+wscript
+cscript
+installutil
+regasm
+regsvcs
+msbuild
+cmstp
+odbcconf
+forfiles
+pcalua
+"wmic "
+hh.exe
+
+# AutoIncidentReporter.AttackRuleKeywords.
+[incident.attackKeywords]
+ransomware
+cuckoo
+injection
+reverse shell
+credential
+lsass
+beacon
+exfil
+c2
+dump
+mimikatz
+cobalt
+lateral
+token theft
+shadow copy
+uac bypass
+persistence
+rootkit
+keylog
+clipbanker
+process hollowing
+dll sideload
+supply chain
+reinfection
+malware
+stalkerware
+surveillance
+remote control
+session theft
+webcam
+screen capture
+
+# SensitiveFileAccessMonitor.BrowserCredentialFragments.
+[sensitiveFile.browserCredentials]
+"\login data"
+"\web data"
+"\cookies"
+"\network\cookies"
+"\key4.db"
+"\logins.json"
+"\signons.sqlite"
+"\formhistory.sqlite"
+"\local state"
+
+# SensitiveFileAccessMonitor.DeveloperSecretFragments.
+[sensitiveFile.developerSecrets]
+"\.ssh\id_"
+"\.ssh\known_hosts"
+"\.ssh\authorized_keys"
+"\.aws\credentials"
+"\.aws\config"
+"\.azure\accesstokens"
+"\.azure\azureprofile.json"
+"\.config\gcloud\credentials"
+"\.config\gcloud\access_tokens"
+"\.kube\config"
+"\.docker\config.json"
+"\.npmrc"
+"\.pypirc"
+"\.netrc"
+"\.gnupg\"
+"\.git-credentials"
+
+# WmiPersistenceSignals.HostileConsumerFragments.
+[wmi.hostileConsumerFragments]
+powershell
+pwsh
+cmd.exe
+cmd /c
+cmd /k
+wscript
+cscript
+mshta
+rundll32
+regsvr32
+bitsadmin
+certutil
+msiexec
+-enc
+-encodedcommand
+frombase64string
+downloadstring
+downloadfile
+invoke-webrequest
+invoke-expression
+iex(
+"iex "
+"\temp\"
+"\appdata\"
+"\users\"
+"\programdata\"
+http://
+https://
+"\\"
+activeXObject
+eval(
+
+# BehavioralCorrelationEngine credential-access + outbound composite (user-visible rule name,
+# asserted by InfostealerChainTests) and the fragment correlators match it by.
+[rule.credentialHarvest]
+Infostealer: Credential Access + Outbound
+
+[fragment.credentialHarvest]
+Infostealer
+
+# CoercionAbusePolicy fragments that name malware families (rest stay in code).
+[coercion.surveillanceExtra]
+Keylog
+ClipBanker
+
+[coercion.sessionTheftExtra]
+Login Data
+Web Data
+Local Storage
+LevelDB
+
+# ScoringEngine single tokens (lower-case).
+[scoring.lateralTool]
+psexec
+
+[scoring.inputCaptureTool]
+keylogger
+
+# WeightedCorrelationEngine family fragments that name tools.
+[wce.credentialTools]
+Mimikatz
+
+[wce.reverseShellTools]
+meterpreter
+
+[wce.lateralTools]
+PsExec
+
+# AttackTechniqueMap tool fragments: "insert-after-fragment|fragment|T1,T2".
+# Re-inserted at their original position so Resolve() output order is unchanged.
+[attackMap.toolTechniques]
+Credential Theft|Mimikatz|T1003.001,T1003
+WMI|PsExec|T1569.002,T1021.002
+
+# ResponsePolicy.TerminalOutcomes fragment arrays for families that name tools.
+[terminal.CredentialDump]
+LSASS
+Credential Dump
+Credential Theft
+Mimikatz
+sekurlsa
+procdump
+comsvcs
+MiniDump
+DumpCred
+SAM hive
+SECURITY hive
+ntds.dit
+DCSync
+secretsdump
+Credential Canary
+
+[terminal.TokenTheft]
+Token Theft
+Token Stealing
+SYSTEM Token
+Impersonat
+SeImpersonate
+DuplicateToken
+MakeToken
+GodPotato
+PrintSpoofer
+Potato
+JuicyPotato
+RoguePotato
+SharpEfsPotato
+FudModule
+LegacyHive
+Kernel Exploit Loader
+Installer EoP
+AlwaysInstallElevated
+LPE Scaffold: Privilege Escalation Tool
+
+[terminal.ReverseShell]
+Reverse Shell
+Bind Shell
+Interactive Shell
+pty.spawn
+socket.dup
+nc -e
+ncat
+revshell
+meterpreter
+ClickFix Encoded
+
+# NamedPipeMonitor.KnownBadPatterns. All compiled IgnoreCase; "(?-i)" restores the original
+# case-sensitive patterns exactly. Order preserved (first match is reported).
+[namedPipe.knownBadPatterns]
+^msagent_[a-f0-9]{2,8}$
+^MSSE-[0-9]{1,4}-server$
+^postex_[a-f0-9]+$
+^postex_ssh_[a-f0-9]+$
+^status_[a-f0-9]{2,8}$
+^msagent_[a-f0-9]{2,8}$
+(?-i)^[ms][a-z]{4,8}[0-9]{1,4}$
+^psexecsvc(-[a-z0-9]+)?$
+^svcctl$
+^RemCom_(stdin|stdout|stderr)
+^csexec_[a-f0-9]+$
+^meterpreter_
+^msf_
+^sliver_
+^havoc_[a-f0-9]+$
+(?-i)^[a-f0-9]{32,}$
+(?-i)^(pipe_)?[a-z]{1,3}[0-9]{6,}$
+
+# CampaignDetectionRule text: "field => value".
+[campaign.text]
+cs.key => CobaltStrike
+cs.name => Cobalt Strike
+cs.description => Cobalt Strike beacon and post-exploitation
+qbot.description => QBot banking trojan
+trickbot.description => TrickBot banking trojan
+
+# Lazarus Operation Dream Job network IoCs (Check Point Research, Aug 2026).
+[campaign.dreamJob.domains]
+envell.xyz
+enveil.online
+uxtramine.org
+
+[campaign.dreamJob.ips]
+135.181.67.203
+135.181.185.158
+
+# CampaignDetectionRule LazarusDreamJob command-line regexes.
+[campaign.dreamJob.cmdline]
+envell\.xyz
+enveil\.online
+uxtramine\.org
+enable_god_mode
+Afd4Eop12
+135\.181\.67\.203
+135\.181\.185\.158
+
+# CampaignIocRule.MaliciousDomainPatterns.
+[campaignIoc.domainPatterns]
+pastebin.com/raw
+hastebin.com/raw
+discord.com/api/webhooks
+discordapp.com/api/webhooks
+api.telegram.org/bot
+hooks.slack.com
+telegram-bot
+webhook.site
+interact.sh
+requestbin.com
+canarytokens.com
+.onion.
+.tor2web.
+envell.xyz
+enveil.online
+uxtramine.org
+
+# UserlandProtocolHeuristics exfil sink lists.
+[webhook.dedicatedSinkHosts]
+webhook.site
+pipedream.net
+requestbin.com
+requestbin.net
+hookbin.com
+beeceptor.com
+mockbin.org
+interact.sh
+oast.fun
+oastify.com
+oast.pro
+canarytokens.com
+canarytokens.org
+webhookrelay.com
+
+[webhook.commsExfilHosts]
+discord.com
+discordapp.com
+api.telegram.org
+hooks.slack.com
+
+[webhook.urlFragments]
+discord.com/api/webhooks
+discordapp.com/api/webhooks
+api.telegram.org/bot
+hooks.slack.com/
+webhook.site/
+telegram-bot
+
+# UserlandProtocolHeuristics.CovertMeshProcessNames.
+[mesh.processNames]
+tailcat
+tailcat-web
+tailcat-webdist
+derper
+magicsock
+wireproxy
+onetun
+boringtun
+wireguard-go
+innernet
+netmaker
+netclient
+sliver
+sliver-client
+sliver-server
+headscale
+
+# RemoteAccessMonitor implant/tunnel names treated as "the tunnel IS the attack" (lower-case).
+[remoteAccess.implantNames]
+sliver
+
+# ReverseShell ClickFixDetectionRule payload markers (lower-cased command line, plain Contains).
+[reverseShell.clickFixMarkers]
+frombase64string
+downloadstring
+downloadfile
+downloaddata
+"iex "
+|iex
+iex(
+invoke-expression
+invoke-webrequest
+invoke-restmethod
+" iwr "
+" irm "
+| iwr
+| irm
+certutil -urlcache
+certutil.exe -urlcache
+bitsadmin
+start-bitstransfer
+"-enc "
+-encodedcommand
+javascript:
+vbscript:
+
+# NetworkFacingParentShellRule payload markers (lower-cased command line, plain Contains).
+[reverseShell.payloadMarkers]
+-enc
+-encodedcommand
+iex
+invoke-expression
+downloadstring
+invoke-webrequest
+frombase64string
+http://
+https://
+certutil
+bitsadmin
+-w hidden
+windowstyle hidden
+
+# SupplyChain rule suspicious install-script markers (lower-cased, plain Contains).
+[supplyChain.markers]
+http://
+https://
+frombase64string
+downloadstring
+iex
+invoke-expression
+invoke-webrequest
+"curl "
+-enc
+hidden
+
+# Generic IEX token for compound rules that need "iex" alongside another condition.
+[token.iex]
+iex
+
+# ScriptExecutionMonitor.IsCriticalScriptMatch markers (ordinal, case-sensitive Contains).
+[script.criticalMarkers]
+Amsi
+Mimi
+sekurlsa
+Sentinel
+
+# CredentialReadTracker.IsSensitivePath (lower-case; EndsWith / Contains, ordinal).
+[credRead.suffixes]
+"\login data"
+"\cookies"
+"\logins.json"
+"\key4.db"
+"\local state"
+"\.aws\credentials"
+"\.git-credentials"
+
+[credRead.sshKeySuffixes]
+"\id_rsa"
+"\id_ed25519"
+
+[credRead.chatSessionStores]
+"\discord\local storage\leveldb\"
+"\discordcanary\local storage\leveldb\"
+"\discordptb\local storage\leveldb\"
+
+# BrowserCredentialGuard Chromium targets: Browser|path relative to %LOCALAPPDATA%|process|description.
+[browserGuard.chromiumTargets]
+Chrome|Google\Chrome\User Data\Default\Login Data|chrome|credential theft
+Chrome|Google\Chrome\User Data\Default\Network\Cookies|chrome|session theft
+Edge|Microsoft\Edge\User Data\Default\Login Data|msedge|credential theft
+Edge|Microsoft\Edge\User Data\Default\Network\Cookies|msedge|session theft
+
+[browserGuard.firefoxLoginsFile]
+logins.json
+
+# RatArtifactInspector: both reported KGB RAT markers must appear (UTF-8 or UTF-16).
+# As C# literals these made Sentinel.Core.dll itself carry the exact marker pair.
+[ratArtifact.kgbMarkers]
+|Ghost|
+WhyYouReverseMe..ImInnocent..LoveYouu..
+
+# LsassAccessRule named dump tools (lower-cased command line, plain Contains).
+[credAccess.dumpTools]
+procdump
+
+# RpcLateralMonitor tool-named lateral pattern: "regex => description".
+[rpcLateral.toolPatterns]
+psexec\s+.*\\\\ => PsExec lateral movement

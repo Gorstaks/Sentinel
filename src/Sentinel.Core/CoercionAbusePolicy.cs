@@ -26,22 +26,9 @@ namespace Sentinel.Core
         /// Commercial / open remote-control tools frequently abused for coercive
         /// control of a victim PC (also used legitimately - never kill on name alone).
         /// </summary>
-        public static readonly HashSet<string> RemoteAccessToolNames = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "anydesk", "teamviewer", "teamviewer_service", "tv_w32", "tv_x64",
-            "rustdesk", "rustdesk_service", "supremo", "supremohelper",
-            "splashtop", "strwinclt", "vncserver", "vncviewer", "winvnc", "tightvnc",
-            "ultravnc", "realvnc", "tvnserver", "dwagent", "dwagsvc",
-            "ammyy", "aa_v3", "getscreen", "chrome_remote_desktop_host",
-            "remotedesktop", "msrdc", "mstsc", "rdpclip", "logmein", "lmi_rescue",
-            "bomgar", "beyondtrust", "connectwisecontrol", "screenconnect",
-            "parsec", "toodesk", "sunloginclient", "oraybox",
-            "quasar", "asyncrat", "njrat", "darkcomet", "nanocore", "remcos",
-            "warzone", "netwire", "orcus", "luminositylink",
-            "tailcat", "wireproxy", "sliver", "chisel", "ngrok",
-        };
+        public static readonly HashSet<string> RemoteAccessToolNames = IndicatorCatalog.Set("coercion.remoteAccessTools");
 
-        private static readonly string[] SurveillanceRuleFragments =
+        private static readonly string[] SurveillanceRuleFragments = new[]
         {
             "Screen Capture",
             "Desktop Duplication",
@@ -50,10 +37,8 @@ namespace Sentinel.Core
             "Camera",
             "Microphone",
             "Phantom Keystroke",
-            "Keylog",
             "Clipboard",
-            "ClipBanker",
-        };
+        }.Concat(IndicatorCatalog.List("coercion.surveillanceExtra")).ToArray();
 
         private static readonly string[] RemoteControlRuleFragments =
         {
@@ -69,7 +54,7 @@ namespace Sentinel.Core
             "Unauthorized Cast",
         };
 
-        private static readonly string[] SessionTheftRuleFragments =
+        private static readonly string[] SessionTheftRuleFragments = new[]
         {
             "Credential Dump",
             "Credential Theft",
@@ -85,11 +70,7 @@ namespace Sentinel.Core
             "Session Hijack",
             "Password Store",
             "DPAPI",
-            "Login Data",
-            "Web Data",
-            "Local Storage",
-            "LevelDB",
-        };
+        }.Concat(IndicatorCatalog.List("coercion.sessionTheftExtra")).ToArray();
 
         private static readonly string[] CoercionCompositeNames =
         {

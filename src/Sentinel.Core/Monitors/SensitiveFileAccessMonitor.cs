@@ -35,25 +35,10 @@ namespace Sentinel.Core
         private const long MinArchiveBytes = 512 * 1024;
 
         // Path fragments (lower-case) identifying browser credential / session stores.
-        private static readonly string[] BrowserCredentialFragments =
-        {
-            @"\login data", @"\web data", @"\cookies", @"\network\cookies",
-            @"\key4.db", @"\logins.json", @"\signons.sqlite", @"\formhistory.sqlite",
-            @"\local state", // Chromium DPAPI-wrapped master key
-        };
+        private static readonly string[] BrowserCredentialFragments = IndicatorCatalog.List("sensitiveFile.browserCredentials");
 
         // Path fragments identifying developer / cloud secret stores.
-        private static readonly string[] DeveloperSecretFragments =
-        {
-            @"\.ssh\id_", @"\.ssh\known_hosts", @"\.ssh\authorized_keys",
-            @"\.aws\credentials", @"\.aws\config",
-            @"\.azure\accesstokens", @"\.azure\azureprofile.json",
-            @"\.config\gcloud\credentials", @"\.config\gcloud\access_tokens",
-            @"\.kube\config",
-            @"\.docker\config.json",
-            @"\.npmrc", @"\.pypirc", @"\.netrc",
-            @"\.gnupg\", @"\.git-credentials",
-        };
+        private static readonly string[] DeveloperSecretFragments = IndicatorCatalog.List("sensitiveFile.developerSecrets");
 
         private static readonly string[] ArchiveExtensions =
         {
@@ -261,7 +246,7 @@ namespace Sentinel.Core
                 Evidence = $"Non-owning process '{procName}' (PID {pid}) accessed {humanKind} '{filePath}'",
                 Reasoning =
                     "A process that does not own this credential/secret store touched it. Modern " +
-                    "infostealers read browser Login Data / Cookies / Local State and developer " +
+                    "credential-harvesting malware reads browser password/cookie/key stores and developer " +
                     "secret files (.ssh, .aws, tokens) directly - no LSASS involved. Observe-only " +
                     "on its own; becomes a kill-grade chain only when correlated with outbound " +
                     "network activity or archive staging on the same process.",

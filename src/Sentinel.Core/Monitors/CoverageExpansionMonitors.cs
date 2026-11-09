@@ -27,15 +27,7 @@ namespace Sentinel.Core
         private static readonly TimeSpan ScanInterval = TimeSpan.FromSeconds(20);
         private static readonly TimeSpan AlertCooldown = TimeSpan.FromMinutes(15);
 
-        private static readonly string[] LpeToolNameFragments =
-        {
-            "JuicyPotato", "JuicyPotatoNG", "GodPotato", "SweetPotato", "RoguePotato",
-            "PrintSpoofer", "SharpEfsPotato", "EfsPotato", "CoercedPotato", "DeadPotato",
-            "LocalPotato", "GenericPotato", "RemotePotato", "MultiPotato",
-            "PetitPotam", "DFSCoerce", "SpoolSample", "SharpUp", "Seatbelt",
-            "winPEAS", "PowerUp", "BeRoot", "PrivescCheck", "Watson",
-            "ExploitCapcom", "PrintNightmare",
-        };
+        private static readonly string[] LpeToolNameFragments = IndicatorCatalog.List("lpe.toolNames");
 
         private static readonly string[] StagingPathMarkers =
         {
@@ -120,7 +112,7 @@ namespace Sentinel.Core
                                 Evidence = $"Process '{name}' (PID {pid}) matches LPE toolkit pattern '{matched}' path='{path ?? "?"}'",
                                 Reasoning =
                                     "Binary name/path matches known local privilege-escalation tooling " +
-                                    "(potato-class, PrintSpoofer, winPEAS, etc.). That process is the attack - " +
+                                    "(potato-class and similar). That process is the attack - " +
                                     "kill-grade. Does not patch kernel races (e.g. afd.sys) - stops userland scaffolding.",
                                 Confidence = staging ? 0.90 : 0.86,
                                 Tier = DetectionTier.Tier1Behavioral,

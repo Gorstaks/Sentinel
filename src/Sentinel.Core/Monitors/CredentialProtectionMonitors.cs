@@ -111,13 +111,17 @@ namespace Sentinel.Core
             // Define all browser targets: (BrowserName, FilePath, ProcessName, Description)
             var targets = new List<(string BrowserName, string FilePath, string ProcessName, string Description)>();
 
-            // Chrome Login Data (credential theft)
+            // Chromium credential / session stores. Indicator data lives in Indicators/indicators.txt
+            // (compressed resource) as "Browser|relative path|process|description".
             if (!string.IsNullOrEmpty(localAppData))
             {
-                targets.Add(("Chrome", Path.Combine(localAppData, @"Google\Chrome\User Data\Default\Login Data"), "chrome", "credential theft"));
-                targets.Add(("Chrome", Path.Combine(localAppData, @"Google\Chrome\User Data\Default\Network\Cookies"), "chrome", "session theft"));
-                targets.Add(("Edge", Path.Combine(localAppData, @"Microsoft\Edge\User Data\Default\Login Data"), "msedge", "credential theft"));
-                targets.Add(("Edge", Path.Combine(localAppData, @"Microsoft\Edge\User Data\Default\Network\Cookies"), "msedge", "session theft"));
+                foreach (var line in IndicatorCatalog.List("browserGuard.chromiumTargets"))
+                {
+                    var f = line.Split('|');
+                    if (f.Length != 4)
+                        throw new InvalidOperationException("Malformed browserGuard.chromiumTargets entry");
+                    targets.Add((f[0], Path.Combine(localAppData, f[1]), f[2], f[3]));
+                }
             }
 
             // Firefox logins.json - multiple profiles possible
@@ -128,7 +132,7 @@ namespace Sentinel.Core
                 {
                     foreach (var prof in Directory.GetDirectories(profilesDir))
                     {
-                        var loginJson = Path.Combine(prof, "logins.json");
+                        var loginJson = Path.Combine(prof, IndicatorCatalog.Text("browserGuard.firefoxLoginsFile"));
                         targets.Add(("Firefox", loginJson, "firefox", "credential theft"));
                     }
                 }

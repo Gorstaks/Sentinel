@@ -7,6 +7,7 @@ namespace Sentinel.Core
 {
     internal static class RatArtifactInspector
     {
+        private static readonly string[] MarkerPair = IndicatorCatalog.List("ratArtifact.kgbMarkers");
         // Group-IB KGB RAT report supplied by the user, October 14 2026.
         // Two reported independent markers in a PE, not a filename/hash kill rule.
         internal static bool Matches(byte[] bytes)
@@ -14,7 +15,9 @@ namespace Sentinel.Core
             if (bytes.Length < 64 || bytes.Length > 2 * 1024 * 1024 || bytes[0] != 'M' || bytes[1] != 'Z') return false;
             int pe = BitConverter.ToInt32(bytes, 0x3c);
             if (pe < 64 || pe > bytes.Length - 4 || BitConverter.ToUInt32(bytes, pe) != 0x4550) return false;
-            return HasMarker(bytes, "|Ghost|") && HasMarker(bytes, "WhyYouReverseMe..ImInnocent..LoveYouu..");
+            // The reported markers live in the compressed indicator resource (see IndicatorCatalog):
+            // as UTF-16 literals they made Sentinel.Core.dll itself carry the exact RAT marker pair.
+            return MarkerPair.All(m => HasMarker(bytes, m));
         }
         private static bool HasMarker(byte[] bytes, string marker)
             => Contains(bytes, Encoding.UTF8.GetBytes(marker)) || Contains(bytes, Encoding.Unicode.GetBytes(marker));
@@ -50,7 +53,7 @@ namespace Sentinel.Core
             ProcessName = Path.GetFileName(file), Confidence = 0.65,
             Tier = DetectionTier.Tier2Indicator, AuthorizedResponse = ResponseAction.LogOnly,
             SignalType = SignalType.Generic,
-            Evidence = "A bounded PE content read found both reported KGB/NjRAT-derived markers; filename is not used for matching.",
+            Evidence = "A bounded PE content read found both reported RAT-family markers; filename is not used for matching.",
             Reasoning = "Static artifact evidence only. Embedded examples or modified binaries can match; encrypted/changed markers can evade it. No execution or malware-family attribution is proven.",
             Metadata = new Dictionary<string, string> { ["FilePath"] = file, ["WeakObserveSeed"] = "true", ["ArtifactFamily"] = "KGB RAT report" }
         };

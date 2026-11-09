@@ -1841,19 +1841,13 @@ namespace Sentinel.Core
             return s.Length == 1 && char.IsLetter(s[0]);
         }
 
-        private static async Task<bool> RunEncodedPowerShellAsync(string script)
+        /// <summary>
+        /// Runs a constant PowerShell command; caller data goes only through SENTINEL_ARG_n
+        /// environment variables. Output is not redirected, so an unread pipe cannot block.
+        /// </summary>
+        private static async Task<bool> RunConstantPowerShellAsync(string command, params string[] args)
         {
-            var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
-            var psi = new ProcessStartInfo
-            {
-                FileName = "powershell.exe",
-                Arguments = $"-NoProfile -NonInteractive -EncodedCommand {encoded}",
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            using var proc = Process.Start(psi);
+            using var proc = Process.Start(ConstantPowerShell.CreateStartInfo(command, args));
             if (proc == null) return false;
             await proc.WaitForExitAsync();
             return proc.ExitCode == 0;
@@ -1865,9 +1859,9 @@ namespace Sentinel.Core
             {
                 if (!IsSingleDriveLetter(driveLetter)) return false;
                 var letter = driveLetter.Trim().TrimEnd(':', '\\').ToUpperInvariant();
-                var script =
-                    $"Dismount-VHD -DiskNumber ((Get-Partition -DriveLetter '{letter}').DiskNumber) -Confirm:$false";
-                return await RunEncodedPowerShellAsync(script);
+                return await RunConstantPowerShellAsync(
+                    "Dismount-VHD -DiskNumber ((Get-Partition -DriveLetter $env:SENTINEL_ARG_0).DiskNumber) -Confirm:$false",
+                    letter);
             }
             catch (Exception ex)
             {
@@ -1882,8 +1876,9 @@ namespace Sentinel.Core
             {
                 if (!IsSingleDriveLetter(driveLetter)) return false;
                 var letter = driveLetter.Trim().TrimEnd(':', '\\').ToUpperInvariant();
-                var script = $"Dismount-DiskImage -DevicePath '\\\\.\\{letter}:' -ErrorAction SilentlyContinue";
-                return await RunEncodedPowerShellAsync(script);
+                return await RunConstantPowerShellAsync(
+                    "Dismount-DiskImage -DevicePath $env:SENTINEL_ARG_0 -ErrorAction SilentlyContinue",
+                    $"\\\\.\\{letter}:");
             }
             catch (Exception ex)
             {

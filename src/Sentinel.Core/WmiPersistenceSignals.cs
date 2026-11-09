@@ -21,18 +21,7 @@ namespace Sentinel.Core
         /// Command / script fragments that turn a WMI consumer into an executable persistence leg.
         /// NTEventLogEventConsumer without these is ordinary logging, not a nuke seed.
         /// </summary>
-        public static readonly string[] HostileConsumerFragments =
-        {
-            "powershell", "pwsh", "cmd.exe", "cmd /c", "cmd /k",
-            "wscript", "cscript", "mshta", "rundll32", "regsvr32",
-            "bitsadmin", "certutil", "msiexec",
-            "-enc", "-encodedcommand", "frombase64string",
-            "downloadstring", "downloadfile", "invoke-webrequest",
-            "invoke-expression", "iex(", "iex ",
-            @"\temp\", @"\appdata\", @"\users\", @"\programdata\",
-            "http://", "https://", "\\\\",
-            "activeXObject", "eval(",
-        };
+        public static readonly string[] HostileConsumerFragments = IndicatorCatalog.List("wmi.hostileConsumerFragments");
 
         public static readonly string[] WmiHostProcessNames =
         {

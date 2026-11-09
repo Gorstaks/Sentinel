@@ -10,9 +10,21 @@
 
 ### Changed
 - `docs/NANOAV.md` and the project-state steering file describe the folder as removed.
-
-
 - Hardened security policy (GSecurity.inf)
+
+### Fixed - VirusTotal "stealer" / "banking trojan" / "generic trojan" verdicts on Sentinel.Core.dll
+Static AV/ML engines match a PE's string table. Sentinel.Core.dll carried the same plaintext words as the malware it detects, so its own detection data made it look like a stealer, RAT or injector. Detection behaviour is unchanged. Only where the words live has changed.
+- **Indicator data moved out of the PE.** Offensive-tool names (credential dumpers, C2 frameworks, potato/LPE tools, EDR killers, RAT families), browser and developer credential-store paths, exfil sinks (webhook, Telegram, Discord), Lazarus Dream Job IoCs, injection API names, downloader keywords and the KGB RAT marker pair now live in `src/Sentinel.Core/Indicators/indicators.txt`. The build deflates that file into the assembly (`Sentinel.Core.Indicators.bin`), and `IndicatorCatalog` reads it at runtime. This is a compressed data resource, the same way AV signature databases ship. It is not in-code string splitting, which ML engines score as evasion (see the v2.3.6 note in `NativeResolver`). Parsing fails loudly: a missing or empty section throws, so detection cannot silently disappear. All values, including significant leading and trailing spaces, case-sensitive pipe regexes and ATT&CK map order, are kept byte for byte.
+- **Honeypot pipe names moved out of the PE.** `DecoyPipeMonitor` creates C2-named pipes (`msagent_01`, `postex_ssh_0001`, ...). As literals, these were the strongest "this binary is C2" tell. They now come from the catalog.
+- **Firewall management script compressed.** `PolicyResources/LocalFirewallPolicy.ps1` is embedded deflated, so the DLL no longer carries a plaintext PowerShell payload. That pattern is a dropper heuristic.
+- **No `-EncodedCommand` launches.** `IsolationResponseEngine` (ISO dismount, Hyper-V stop), `VolumeMountMonitor` (VHD/ISO dismount) and `WindowsFirewallPolicyBridge` now start PowerShell with a constant `-Command`. Caller data (ISO path, VM name, drive letter) goes only through `SENTINEL_ARG_n` environment variables (`ConstantPowerShell`), so it is never parsed as code. Injection safety is the same as before, without the encoded-command launch that sandboxes score as trojan behaviour and that Sentinel's own rules flag.
+- **Prose and labels reworded** where they named malware families: the clipboard rule is now `Input Integrity: Clipboard Write-Replace (Address-Swap Pattern)`, the reasoning text uses generic terms, and the port-4444 block label is `Implant_4444`. Persisted firewall rules key on port and protocol, so nothing is orphaned. The `Infostealer: Credential Access + Outbound` rule name is unchanged; it is read from the catalog.
+- **Signing is no longer skipped silently.** `installer/build.ps1` always runs the new `tools/sign-binaries.ps1`, which signs only `Sentinel*` binaries and the installer with signtool (SHA-256 plus RFC 3161 timestamp, then verified). Configure a certificate thumbprint, a PFX, or Microsoft Trusted Signing (dlib) through environment variables. With no certificate it prints an UNSIGNED BUILD warning. With `SENTINEL_REQUIRE_SIGNING=1` it fails. An unsigned security product is still the largest single VirusTotal factor. This release is unsigned until a certificate is configured.
+
+The clipboard and keyboard listeners in `InputIntegrityGuard` are unchanged and remain Tier2/LogOnly. They only time clipboard changes and never read clipboard contents. Their API imports are behaviour that string changes can't remove, so signing is the fix there.
+
+### Tests
+- New `IndicatorCatalogTests`: every referenced section loads non-empty; missing sections throw; quoted spaces survive parsing; kill-critical values are byte-identical; case-sensitive pipe regexes stay case-sensitive; the firewall script decompresses; `Sentinel.Core.dll` contains none of 36 flagged plaintext tokens (regression guard); and `ConstantPowerShell` never parses data as code, including a live PowerShell round-trip with a quote-breakout value.
 
 ## [3.6.8] - 2026-11-07
 

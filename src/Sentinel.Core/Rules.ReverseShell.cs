@@ -157,6 +157,8 @@ namespace Sentinel.Core
     [RuleCategory(DetectionCategory.ReverseShell)]
     public class ClickFixDetectionRule : IDetectionRule
     {
+        private static readonly string[] ClickFixMarkers = IndicatorCatalog.List("reverseShell.clickFixMarkers");
+        private static readonly string IexToken = IndicatorCatalog.Text("token.iex");
         public string Name => "ClickFixDetectionRule";
 
         public DetectionEvent? Evaluate(FusedTelemetryContext context)
@@ -194,35 +196,16 @@ namespace Sentinel.Core
                 return null;
 
             // v1.6.1: Expanded payload signatures from 2025-26 ClickFix campaigns
+            // Plain markers (download cradles, encoded/IEX launch) live in the compressed indicator
+            // resource (see IndicatorCatalog); compound conditions stay here. Same ordinal matching.
             bool isClickFixPayload =
-                cmd.Contains("frombase64string") ||
-                cmd.Contains("downloadstring") ||
-                cmd.Contains("downloadfile") ||
-                cmd.Contains("downloaddata") ||
-                cmd.Contains("iex ") ||
-                cmd.Contains("|iex") ||
-                cmd.Contains("iex(") ||
-                cmd.Contains("invoke-expression") ||
-                cmd.Contains("invoke-webrequest") ||
-                cmd.Contains("invoke-restmethod") ||
-                cmd.Contains(" iwr ") ||
-                cmd.Contains(" irm ") ||
-                cmd.Contains("| iwr") ||
-                cmd.Contains("| irm") ||
-                cmd.Contains("certutil -urlcache") ||
-                cmd.Contains("certutil.exe -urlcache") ||
-                cmd.Contains("bitsadmin") ||
-                cmd.Contains("start-bitstransfer") ||
+                ClickFixMarkers.Any(cmd.Contains) ||
                 cmd.Contains("curl ") && (cmd.Contains("http") || cmd.Contains("|")) ||
                 cmd.Contains("wget ") && cmd.Contains("http") ||
-                cmd.Contains("-enc ") ||
-                cmd.Contains("-encodedcommand") ||
                 cmd.Contains("-e ") && cmd.Contains("powershell") ||
-                cmd.Contains("-nop") && (cmd.Contains("http") || cmd.Contains("iex") || cmd.Contains("irm")) ||
+                cmd.Contains("-nop") && (cmd.Contains("http") || cmd.Contains(IexToken) || cmd.Contains("irm")) ||
                 cmd.Contains("mshta") && cmd.Contains("http") ||
                 (cmd.Contains("http") && name.Contains("mshta")) ||
-                cmd.Contains("javascript:") ||
-                cmd.Contains("vbscript:") ||
                 // Fake CAPTCHA clipboard often starts with verification noise then command
                 cmd.Contains("verification") && (cmd.Contains("powershell") || cmd.Contains("http")) ||
                 cmd.Contains("captcha") && cmd.Contains("http");
@@ -269,6 +252,7 @@ namespace Sentinel.Core
     [RuleCategory(DetectionCategory.ReverseShell)]
     public class NetworkFacingParentShellRule : IDetectionRule
     {
+        private static readonly string[] PayloadMarkers = IndicatorCatalog.List("reverseShell.payloadMarkers");
         public string Name => "NetworkFacingParentShellRule";
 
         // Processes that legitimately listen on network ports and should NEVER spawn interactive
@@ -378,14 +362,8 @@ namespace Sentinel.Core
             // bump confidence; otherwise stay at high-but-not-maximum to allow for fringe legitimate
             // setups (e.g. a developer running `w3wp` locally while also opening a terminal).
             var cmd = (pt.CommandLine ?? "").ToLowerInvariant();
-            bool hasPayloadMarker =
-                cmd.Contains("-enc") || cmd.Contains("-encodedcommand") ||
-                cmd.Contains("iex") || cmd.Contains("invoke-expression") ||
-                cmd.Contains("downloadstring") || cmd.Contains("invoke-webrequest") ||
-                cmd.Contains("frombase64string") ||
-                cmd.Contains("http://") || cmd.Contains("https://") ||
-                cmd.Contains("certutil") || cmd.Contains("bitsadmin") ||
-                cmd.Contains("-w hidden") || cmd.Contains("windowstyle hidden");
+            // Markers live in the compressed indicator resource (see IndicatorCatalog). Same ordinal matching.
+            bool hasPayloadMarker = PayloadMarkers.Any(cmd.Contains);
 
             double confidence = hasPayloadMarker ? 0.95 : 0.82;
 

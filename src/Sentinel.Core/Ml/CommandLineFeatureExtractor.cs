@@ -17,23 +17,11 @@ namespace Sentinel.Core.Ml
     public static class CommandLineFeatureExtractor
     {
         // Tokens whose presence is a weak obfuscation/abuse indicator (never a kill on their own).
-        private static readonly string[] DownloadTokens =
-        {
-            "downloadstring", "downloadfile", "downloaddata", "invoke-webrequest", " iwr ",
-            "start-bitstransfer", "bitsadmin", "certutil", "curl ", "wget ", "webclient",
-            "net.webclient", "system.net.webclient"
-        };
+        private static readonly string[] DownloadTokens = IndicatorCatalog.List("ml.downloadTokens");
 
-        private static readonly string[] IexTokens =
-        {
-            "iex", "invoke-expression", "invoke-command", "icm ", "&('i'+'ex')", "$executioncontext"
-        };
+        private static readonly string[] IexTokens = IndicatorCatalog.List("ml.iexTokens");
 
-        private static readonly string[] LolbinTokens =
-        {
-            "rundll32", "regsvr32", "mshta", "wscript", "cscript", "installutil", "regasm",
-            "regsvcs", "msbuild", "cmstp", "odbcconf", "forfiles", "pcalua", "wmic ", "hh.exe"
-        };
+        private static readonly string[] LolbinTokens = IndicatorCatalog.List("ml.lolbinTokens");
 
         public static CommandLineFeatureVector Extract(string commandLine)
         {

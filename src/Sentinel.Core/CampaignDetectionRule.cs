@@ -19,12 +19,17 @@ namespace Sentinel.Core
 
         private readonly ILogger<CampaignDetectionRule> _logger;
 
+        // Family names, descriptions and network IoCs live in the compressed indicator resource
+        // (see IndicatorCatalog). Declared before CampaignDatabase: static fields initialize in order.
+        private static readonly Dictionary<string, string> CampaignText =
+            IndicatorCatalog.Pairs("campaign.text").ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
+
         private static readonly Dictionary<string, CampaignIndicators> CampaignDatabase = new()
         {
-            ["CobaltStrike"] = new CampaignIndicators
+            [CampaignText["cs.key"]] = new CampaignIndicators
             {
-                CampaignName = "Cobalt Strike",
-                Description = "Cobalt Strike beacon and post-exploitation",
+                CampaignName = CampaignText["cs.name"],
+                Description = CampaignText["cs.description"],
                 FileNames = new[] { "beacon.exe", "artifact.exe", "pipeclient.exe" },
                 ProcessPatterns = new[] { "beacon", "artifact" },
                 CommandLinePatterns = new[] { @"-http-get|-http-post|-dns", @"pipeclient" },
@@ -34,7 +39,7 @@ namespace Sentinel.Core
             ["QBot"] = new CampaignIndicators
             {
                 CampaignName = "QBot/QakBot",
-                Description = "QBot banking trojan",
+                Description = CampaignText["qbot.description"],
                 // v3.8.0: Removed "regsvr32.exe" and "services.exe" - legitimate system binaries
                 FileNames = new[] { "chkdsks.exe", "disk.exe", "taskhost.exe" },
                 ProcessPatterns = new[] { "chkdsks", "disk" },
@@ -57,7 +62,7 @@ namespace Sentinel.Core
             ["TrickBot"] = new CampaignIndicators
             {
                 CampaignName = "TrickBot",
-                Description = "TrickBot banking trojan",
+                Description = CampaignText["trickbot.description"],
                 // v3.8.0: Removed "services.exe" and "client.exe" - too generic
                 FileNames = new[] { "tab.exe", "inject.exe" },
                 ProcessPatterns = new[] { "tab", "inject" },
@@ -76,12 +81,7 @@ namespace Sentinel.Core
                     "OneScreenCapture64.dll", "OneScreenCapture64",
                 },
                 ProcessPatterns = new[] { "SecurityPDF", "Afd4Eop12" },
-                CommandLinePatterns = new[]
-                {
-                    @"envell\.xyz", @"enveil\.online", @"uxtramine\.org",
-                    @"enable_god_mode", @"Afd4Eop12",
-                    @"135\.181\.67\.203", @"135\.181\.185\.158",
-                },
+                CommandLinePatterns = IndicatorCatalog.List("campaign.dreamJob.cmdline"),
                 MitreTechniques = new[] { "T1204.002", "T1574.002", "T1068", "T1071", "T1055" }
             }
         };

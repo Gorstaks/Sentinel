@@ -48,15 +48,9 @@ namespace Sentinel.Core
             "Acrobat", "AcroRd32", "FoxitReader", "FoxitPDFReader",
         };
 
-        public static readonly HashSet<string> DreamJobDomains = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "envell.xyz", "enveil.online", "uxtramine.org",
-        };
+        public static readonly HashSet<string> DreamJobDomains = IndicatorCatalog.Set("campaign.dreamJob.domains");
 
-        public static readonly HashSet<string> DreamJobIps = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "135.181.67.203", "135.181.185.158",
-        };
+        public static readonly HashSet<string> DreamJobIps = IndicatorCatalog.Set("campaign.dreamJob.ips");
 
         /// <summary>Public Check Point Research SHA-256 IOCs for Operation Dream Job (Aug 2026).</summary>
         public static readonly HashSet<string> DreamJobSha256 = new(StringComparer.OrdinalIgnoreCase)

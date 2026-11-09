@@ -352,6 +352,10 @@ namespace Sentinel.Core
         /// string-pattern matching for composite detections and dynamically-generated rule names
         /// that don't have a corresponding class.
         /// </summary>
+        // Tool-named tokens, kept in the compressed indicator resource (see IndicatorCatalog).
+        private static readonly string[] LateralToolTokens = IndicatorCatalog.Lower("scoring.lateralTool");
+        private static readonly string[] InputCaptureToolTokens = IndicatorCatalog.Lower("scoring.inputCaptureTool");
+
         public static DetectionCategory CategorizeDetection(string? ruleName)
         {
             if (string.IsNullOrEmpty(ruleName)) return DetectionCategory.Unknown;
@@ -376,7 +380,7 @@ namespace Sentinel.Core
                 return DetectionCategory.FilelessAttack;
             // Lateral-movement composites (e.g. "Token Theft + Lateral Movement"): the matcher
             // had no lateral branch at all, so these fell to Unknown.
-            if (r.Contains("lateral") || r.Contains("psexec") || r.Contains("winrm") || r.Contains("dcom")) return DetectionCategory.LateralMovement;
+            if (r.Contains("lateral") || LateralToolTokens.Any(r.Contains) || r.Contains("winrm") || r.Contains("dcom")) return DetectionCategory.LateralMovement;
             if (r.Contains("reverse shell") || r.Contains("reverseshell") || r.Contains("c2") || r.Contains("callback")) return DetectionCategory.ReverseShell;
             if (r.Contains("injection") || r.Contains("hollowing") || r.Contains("threatintel")) return DetectionCategory.ProcessInjection;
             if (r.Contains("ransomware") || r.Contains("shadow copy")) return DetectionCategory.Ransomware;
@@ -388,7 +392,7 @@ namespace Sentinel.Core
             if (r.Contains("entropy")) return DetectionCategory.HighEntropy;
             if (r.Contains("campaign")) return DetectionCategory.CampaignIoC;
             if (r.Contains("audiohijack") || r.Contains("audio hijack") || r.Contains("webcamhijack") || r.Contains("webcam hijack") ||
-                r.Contains("keystroke") || r.Contains("keylogger") || r.Contains("phantom") || r.Contains("cursor") ||
+                r.Contains("keystroke") || InputCaptureToolTokens.Any(r.Contains) || r.Contains("phantom") || r.Contains("cursor") ||
                 r.Contains("fakeuac") || r.Contains("fake uac") || r.Contains("cookie") || r.Contains("neuro")) return DetectionCategory.AttackOnUser;
             if (r.Contains("anti-tamper") || r.Contains("antitamper") || r.Contains("self-protection") || r.Contains("selfprotection") ||
                 r.Contains("verdictgate") || r.Contains("verdict gate") || r.Contains("chain-nuke") || r.Contains("composite")) return DetectionCategory.AntiTamper;

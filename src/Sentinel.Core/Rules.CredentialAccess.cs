@@ -58,6 +58,9 @@ namespace Sentinel.Core
     {
         public string Name => "LsassAccessRule";
 
+        // Named dump tools live in the compressed indicator resource (see IndicatorCatalog). Same ordinal matching.
+        private static readonly string[] DumpToolTokens = IndicatorCatalog.List("credAccess.dumpTools");
+
         public DetectionEvent? Evaluate(FusedTelemetryContext context)
         {
             if (context.TriggeringEvent is ProcessTelemetry pt)
@@ -66,7 +69,7 @@ namespace Sentinel.Core
                 if (cmd.Contains("lsass") && 
                     (cmd.Contains("dumptool") || 
                      cmd.Contains("minidump") || 
-                     cmd.Contains("procdump")))
+                     DumpToolTokens.Any(cmd.Contains)))
                 {
                     return new DetectionEvent
                     {

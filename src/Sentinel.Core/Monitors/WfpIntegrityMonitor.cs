@@ -76,7 +76,7 @@ namespace Sentinel.Core
 
         protected override async Task ExecuteAsync(CancellationToken ct)
         {
-            _logger.LogInformation("[WfpIntegrityMonitor] Started - scanning WFP filters for EDRSilencer activity every 30s");
+            _logger.LogInformation("[WfpIntegrityMonitor] Started - scanning WFP filters for security-tool silencing every 30s");
 
             // Initial delay - let the system stabilize
             await Task.Delay(20000, ct);
@@ -244,7 +244,7 @@ namespace Sentinel.Core
                         Evidence = $"{edrTargetingFilters.Count} WFP BLOCK filters targeting known security tools: " +
                                    $"[{string.Join(", ", edrTargetingFilters.Take(8))}]",
                         Reasoning = "Multiple WFP BLOCK filters targeting known endpoint security products were detected. " +
-                                    "This is consistent with EDRSilencer or GentleKiller framework pre-attack preparation. " +
+                                    "This is consistent with EDR-silencing toolkit pre-attack preparation. " +
                                     "Even though Sentinel is not directly targeted yet, this is a strong indicator of " +
                                     "imminent ransomware or advanced malware deployment.",
                         Confidence = 0.85,

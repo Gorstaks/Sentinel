@@ -27,8 +27,8 @@ namespace Sentinel.Tests.Monitors
         {
             yield return new object[] { InputIntegrityGuard.BuildInjectedEvent("keyboard", 40, 40) };
             yield return new object[] { InputIntegrityGuard.BuildInjectedEvent("mouse", 40, 40) };
-            yield return new object[] { InputIntegrityGuard.BuildKeyloggerHeuristicEvent(500) };
-            yield return new object[] { InputIntegrityGuard.BuildClipBankerEvent(120) };
+            yield return new object[] { InputIntegrityGuard.BuildAutomatedInputEvent(500) };
+            yield return new object[] { InputIntegrityGuard.BuildClipboardSwapEvent(120) };
         }
 
         [Theory]

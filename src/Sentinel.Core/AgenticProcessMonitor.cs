@@ -36,20 +36,12 @@ namespace Sentinel.Core
             "lmstudio", "lm-studio", "open-webui", "npx", "npx.cmd"
         };
 
-        private static readonly HashSet<string> HighRiskChildren = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "powershell", "pwsh", "cmd", "bash", "wsl", "python", "python3", "node",
-            "certutil", "mshta", "bitsadmin", "curl", "wget", "ssh", "scp", "rclone",
-            "mimikatz", "procdump", "rubeus", "lazagne"
-        };
+        // Indicator data lives in Indicators/indicators.txt (compressed resource); see IndicatorCatalog.
+        private static readonly HashSet<string> HighRiskChildren = IndicatorCatalog.Set("agent.highRiskChildren");
 
-        private static readonly string[] CredentialPathFragments =
-        {
-            @"\login data", @"\cookies", @"\key4.db", @"\logins.json",
-            @"\.ssh\id_", @"\credentials", @"\.aws\", @"\.azure\",
-            @"\.config\gcloud", @"\appdata\roaming\mozilla",
-            @"\.kube\config", @"\.gnupg\"
-        };
+        private static readonly string[] CredentialPathFragments = IndicatorCatalog.List("agent.credentialPaths");
+
+        private static readonly HashSet<string> CriticalChildren = IndicatorCatalog.Set("agent.criticalChildren");
 
         public AgenticProcessMonitor(
             DetectionEngine detectionEngine,
@@ -163,9 +155,7 @@ namespace Sentinel.Core
                     continue;
                 _alertCooldown[key] = now;
 
-                var critical = credTouch ||
-                    childBare.Equals("mimikatz") ||
-                    childBare.Equals("procdump");
+                var critical = credTouch || CriticalChildren.Contains(childBare);
 
                 var confidence = critical ? 0.88 : burst ? 0.72 : 0.62;
                 var response = critical

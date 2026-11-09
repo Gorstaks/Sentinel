@@ -218,14 +218,11 @@ if (Test-Path $GvpnOut) { Remove-Item $GvpnOut -Recurse -Force }
 # 3e. Sign published binaries with Authenticode
 Write-Host "Signing published binaries..." -ForegroundColor Yellow
 $SignScript = Join-Path $PSScriptRoot "..\tools\sign-binaries.ps1"
-if (Test-Path $SignScript) {
-    try {
-        & $SignScript -TargetDirectory $PublishDir
-    }
-    catch {
-        Write-Warning "Binary signing encountered an issue: $_"
-    }
-}
+# Signing used to be skipped silently when this script was missing. It now always runs and
+# prints a prominent UNSIGNED BUILD warning (or fails with SENTINEL_REQUIRE_SIGNING=1).
+if (-not (Test-Path $SignScript)) { throw "Signing script missing: $SignScript" }
+& $SignScript -TargetDirectory $PublishDir
+if ($LASTEXITCODE -ne 0) { throw "Binary signing failed (SENTINEL_REQUIRE_SIGNING is set)" }
 
 # 4. Locate Inno Setup Compiler
 Write-Host "Locating Inno Setup compiler..." -ForegroundColor Yellow
@@ -269,15 +266,9 @@ if (-not (Test-Path $InstallerPath)) {
     throw "Installer not produced at $InstallerPath"
 }
 
-# 5a. Sign produced installer
-if ((Test-Path $SignScript) -and (Test-Path $InstallerPath)) {
-    try {
-        & $SignScript -TargetDirectory $PSScriptRoot
-    }
-    catch {
-        Write-Warning "Installer signing encountered an issue: $_"
-    }
-}
+# 5a. Sign produced installer (SentinelSetup-*.exe lives in the installer folder)
+& $SignScript -TargetDirectory $PSScriptRoot
+if ($LASTEXITCODE -ne 0) { throw "Installer signing failed (SENTINEL_REQUIRE_SIGNING is set)" }
 
 $sizeMb = [math]::Round((Get-Item $InstallerPath).Length / 1MB, 2)
 Write-Host "==============================================" -ForegroundColor Green

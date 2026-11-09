@@ -513,15 +513,7 @@ namespace Sentinel.Core
         /// Enrichment only - never a President's-law kill. Official
         /// <c>tailscale</c>/<c>wireguard</c> NICs are skipped via <see cref="IsVpnOrIkeProcess"/>.
         /// </summary>
-        internal static readonly HashSet<string> CovertMeshProcessNames = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "tailcat", "tailcat-web", "tailcat-webdist",
-            "derper", "magicsock",
-            "wireproxy", "onetun", "boringtun", "wireguard-go",
-            "innernet", "netmaker", "netclient",
-            "sliver", "sliver-client", "sliver-server",
-            "headscale",
-        };
+        internal static readonly HashSet<string> CovertMeshProcessNames = IndicatorCatalog.Set("mesh.processNames");
 
         public static bool LooksLikeCovertMeshName(string? processName)
         {
@@ -634,36 +626,19 @@ namespace Sentinel.Core
         /// Purpose-built HTTP callback sinks. A browser visiting these is skipped
         /// via <see cref="ShouldSkipWorkSurface"/>; a script host is a stealer.
         /// </summary>
-        internal static readonly string[] DedicatedWebhookSinkHosts =
-        {
-            "webhook.site", "pipedream.net", "requestbin.com", "requestbin.net",
-            "hookbin.com", "beeceptor.com", "mockbin.org", "interact.sh",
-            "oast.fun", "oastify.com", "oast.pro", "canarytokens.com",
-            "canarytokens.org", "webhookrelay.com",
-        };
+        internal static readonly string[] DedicatedWebhookSinkHosts = IndicatorCatalog.List("webhook.dedicatedSinkHosts");
 
         /// <summary>
         /// Comms platforms stealers abuse as anonymous POST sinks.
         /// Official Discord/Telegram/Slack apps are skipped by name.
         /// </summary>
-        internal static readonly string[] CommsExfilHosts =
-        {
-            "discord.com", "discordapp.com", "api.telegram.org", "hooks.slack.com",
-        };
+        internal static readonly string[] CommsExfilHosts = IndicatorCatalog.List("webhook.commsExfilHosts");
 
         /// <summary>
         /// Path / URL fragments visible in command lines and PowerShell 4104.
         /// HTTPS on the wire never shows these without TLS intercept.
         /// </summary>
-        internal static readonly string[] WebhookUrlFragments =
-        {
-            "discord.com/api/webhooks",
-            "discordapp.com/api/webhooks",
-            "api.telegram.org/bot",
-            "hooks.slack.com/",
-            "webhook.site/",
-            "telegram-bot",
-        };
+        internal static readonly string[] WebhookUrlFragments = IndicatorCatalog.List("webhook.urlFragments");
 
         public static string NormalizeHost(string? host)
         {
@@ -1767,7 +1742,7 @@ namespace Sentinel.Core
                 Reasoning = kind switch
                 {
                     UserlandProtocolHeuristics.CovertMeshKind.NamedTool =>
-                        "A userspace mesh/overlay binary (tailcat, wireproxy, boringtun, sliver WG, innernet, ...) " +
+                        "A userspace mesh/overlay binary (tailcat, wireproxy, boringtun, innernet, ...) " +
                         "is running. WireGuard in-process, no TAP/Wintun, no Tailscale control plane - covert C2. " +
                         "Official tailscale.exe is not this rule. Kill-grade C2.",
                     UserlandProtocolHeuristics.CovertMeshKind.DerpRelay =>
@@ -1914,12 +1889,12 @@ namespace Sentinel.Core
                 {
                     UserlandProtocolHeuristics.WebhookKind.DedicatedSink =>
                         "A non-browser process contacted a disposable HTTP callback host " +
-                        "(webhook.site, interact.sh, requestbin, canarytokens). Stealer exfil sink. Kill-grade C2.",
+                        "(disposable request-capture service). Credential-exfil sink. Kill-grade C2.",
                     UserlandProtocolHeuristics.WebhookKind.CommsPlatformAbuse =>
                         "Script host or Temp/Downloads binary has HTTPS after Discord/Telegram/Slack bot-API DNS " +
                         "from this PID. Official Discord/Telegram/Slack apps never emit this rule. Kill-grade C2.",
                     UserlandProtocolHeuristics.WebhookKind.UrlInContent =>
-                        "A webhook URL is on the command line (curl/IWR stealer). Kill-grade C2.",
+                        "A webhook URL is on the command line (scripted exfil). Kill-grade C2.",
                     _ => "Webhook-shaped exfil.",
                 },
                 Confidence = UserlandProtocolHeuristics.ConfidenceFor(kind),

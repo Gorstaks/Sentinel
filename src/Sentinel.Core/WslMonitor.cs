@@ -42,19 +42,7 @@ namespace Sentinel.Core
         private static readonly TimeSpan ScanInterval = TimeSpan.FromSeconds(10);
 
         // Suspicious commands that indicate malicious WSL usage
-        private static readonly string[] SuspiciousPatterns = new[]
-        {
-            "nc -", "ncat ", "socat ", "/dev/tcp/", "bash -i",
-            "curl http", "wget http", "python -c", "python3 -c",
-            "perl -e", "ruby -e", "php -r",
-            "/etc/shadow", "/etc/passwd", "mimikatz", "sekurlsa",
-            "meterpreter", "reverse_tcp", "bind_shell",
-            "base64 -d", "openssl enc",
-            "iptables", "tcpdump", "nmap ", "masscan",
-            "/mnt/c/windows/system32", "/mnt/c/users",
-            // v2.5.5: CloudSEK BRIDGEHEAD npm campaign (June 2026) - reads /proc/version to detect WSL
-            "/proc/version", "cat /proc/version", "is_wsl", "get_wu()"
-        };
+        private static readonly string[] SuspiciousPatterns = IndicatorCatalog.List("wsl.suspiciousPatterns");
 
         // Legitimate WSL uses that should not alert
         private static readonly string[] LegitimatePatterns = new[]

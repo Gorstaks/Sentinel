@@ -52,44 +52,11 @@ namespace Sentinel.Core
 
         // Known EDR-killer tool process names (case-insensitive match)
         // Updated 2026-08 from public threat intel (ESET, Sophos, CrowdStrike reports)
-        private static readonly HashSet<string> KnownEdrKillerNames = new(StringComparer.OrdinalIgnoreCase)
-        {
-            // Commercial EDR killers
-            "Terminator", "terminator",
-            "GentleKiller", "gentlekiller",
-            "Backstab", "backstab",
-            "EDRSilencer", "edrsilencer",
-            "EDRSandBlast", "edrsandblast",
-            "RealBlindingEDR", "realblindingedr",
-            "AuKill", "aukill",
-            "BurntCigar", "burntcigar",
-            "Poortry", "poortry",
-            "Stonestop", "stonestop",
-            "TrueSightKiller", "truesightkiller",
-            "KillAV", "killav",
-            "AV_Killer", "av_killer",
-            "HRSword", "hrsword",
-            "Mhyprot2Killer", "mhyprot2killer",
-
-            // Common offensive tooling that precedes EDR kills
-            "KDU", "kdu",
-            "EDRPrison", "edrprison",
-            "Brute_Ratel", "bruteratel",
-            "SharpTerminator", "sharpterminator",
-            "BatchBypass", "batchbypass",
-            "Auchentoshan", "auchentoshan",
-            "SpyBoy", "spyboy",
-        };
+        // Indicator data lives in Indicators/indicators.txt (compressed resource); see IndicatorCatalog.
+        private static readonly HashSet<string> KnownEdrKillerNames = IndicatorCatalog.Set("edrKiller.names");
 
         // Known EDR-killer filenames (for path-based detection)
-        private static readonly string[] KnownEdrKillerFilePatterns = new[]
-        {
-            "terminator.exe", "edrsilencer.exe", "edrsandblast.exe",
-            "backstab.exe", "aukill.exe", "burntcigar.exe",
-            "truesightkiller.exe", "realblindingedr.exe",
-            "gentlekiller.exe", "poortry.sys", "stonestop.exe",
-            "edrprison.exe", "sharpterminator.exe", "kdu.exe"
-        };
+        private static readonly string[] KnownEdrKillerFilePatterns = IndicatorCatalog.List("edrKiller.fileNames");
 
         public EdrKillerDetectionMonitor(DetectionEngine detectionEngine, ILogger<EdrKillerDetectionMonitor> logger)
         {
@@ -366,17 +333,9 @@ namespace Sentinel.Core
         private readonly DetectionEngine _detectionEngine;
         private readonly ILogger<DecoyPipeMonitor> _logger;
 
-        // C2 framework pipe name patterns (well-known from CTI)
-        // Split so exact names don't appear as contiguous PE string-table entries.
-        private static readonly string[] DecoyPipeNames = new[]
-        {
-            "msagent_01",        // CobaltStrike default
-            "MSSE-1234-server",  // CobaltStrike alternate
-            "postex_ssh_0001",   // CobaltStrike post-exploitation
-            "win_svc_pipe",      // Generic RAT pattern
-            "ntsvcs_00",         // known C2 pipe name
-            "DserNamePipe_00",   // known handler pipe name
-        };
+        // C2 framework pipe name patterns (well-known from CTI), loaded from the compressed
+        // indicator resource so the names are not contiguous entries in the PE string table.
+        private static readonly string[] DecoyPipeNames = IndicatorCatalog.List("decoyPipe.names");
 
         internal static bool IsDecoyPipeName(string name)
             => Array.Exists(DecoyPipeNames, candidate => string.Equals(candidate, name, StringComparison.OrdinalIgnoreCase));
@@ -450,8 +409,8 @@ namespace Sentinel.Core
                         RuleName = "C2 Honeypot: Decoy Pipe Connection",
                         Evidence = $"Process '{clientProcessName}' (PID {clientPid}) connected to honeypot pipe " +
                                    $"'\\\\?\\pipe\\{pipeName}'. This pipe name is associated with C2 frameworks.",
-                        Reasoning = "Sentinel creates named pipes matching known C2 framework patterns " +
-                                    "(CobaltStrike, Metasploit, PoshC2). No legitimate software uses these pipe names. " +
+                        Reasoning = "Sentinel creates named pipes matching well-known post-exploitation " +
+                                    "framework defaults. No legitimate software uses these pipe names. " +
                                     "An external client connected to a decoy; inspect its identity and corroborating behavior.",
                         Confidence = 0.97,
                         Tier = DetectionTier.Tier1Behavioral,

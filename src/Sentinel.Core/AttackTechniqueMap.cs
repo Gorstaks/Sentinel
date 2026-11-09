@@ -11,12 +11,11 @@ namespace Sentinel.Core
     /// </summary>
     public static class AttackTechniqueMap
     {
-        private static readonly (string Fragment, string[] Techniques)[] Map =
+        private static readonly (string Fragment, string[] Techniques)[] Map = WithToolTechniques(new (string Fragment, string[] Techniques)[]
         {
             ("LSASS", new[] { "T1003.001" }),
             ("Credential Dump", new[] { "T1003" }),
             ("Credential Theft", new[] { "T1003" }),
-            ("Mimikatz", new[] { "T1003.001", "T1003" }),
             ("SAM hive", new[] { "T1003.002" }),
             ("DCSync", new[] { "T1003.006" }),
             ("Token Theft", new[] { "T1134" }),
@@ -54,7 +53,6 @@ namespace Sentinel.Core
             ("DNS Exfil", new[] { "T1071.004" }),
             ("Lateral", new[] { "T1021" }),
             ("WMI", new[] { "T1047" }),
-            ("PsExec", new[] { "T1569.002", "T1021.002" }),
             ("RDP", new[] { "T1021.001" }),
             ("PowerShell", new[] { "T1059.001" }),
             ("MSHTA", new[] { "T1218.005" }),
@@ -108,7 +106,27 @@ namespace Sentinel.Core
             ("DERP Relay", new[] { "T1090", "T1095" }),
             ("Covert Webhook", new[] { "T1041", "T1567.004" }),
             ("Disposable Sink", new[] { "T1041", "T1567" }),
-        };
+        });
+
+        /// <summary>
+        /// Inserts tool-named fragments (kept in the compressed indicator resource, see
+        /// IndicatorCatalog) directly after their original neighbour, so Resolve() order is unchanged.
+        /// </summary>
+        private static (string Fragment, string[] Techniques)[] WithToolTechniques((string Fragment, string[] Techniques)[] baseMap)
+        {
+            var list = baseMap.ToList();
+            foreach (var line in IndicatorCatalog.List("attackMap.toolTechniques"))
+            {
+                var f = line.Split('|');
+                if (f.Length != 3)
+                    throw new InvalidOperationException("Malformed attackMap.toolTechniques entry");
+                int anchor = list.FindIndex(e => string.Equals(e.Fragment, f[0], StringComparison.Ordinal));
+                if (anchor < 0)
+                    throw new InvalidOperationException("attackMap.toolTechniques anchor not found in map");
+                list.Insert(anchor + 1, (f[1], f[2].Split(',')));
+            }
+            return list.ToArray();
+        }
 
         /// <summary>
         /// Resolve ATT&amp;CK technique IDs for a rule name (ordered, distinct).

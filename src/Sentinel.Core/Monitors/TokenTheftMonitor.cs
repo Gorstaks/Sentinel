@@ -99,11 +99,7 @@ namespace Sentinel.Core
         };
 
         // Known token manipulation tool module names
-        private static readonly string[] TokenTheftModules = new[]
-        {
-            "incognito", "tokenvator", "sharptoken", "getst", "rubeus",
-            "kekeo", "whoami_module", "impersonate"
-        };
+        private static readonly string[] TokenTheftModules = IndicatorCatalog.List("tokenTheft.modules");
 
         public TokenTheftMonitor(
             DetectionEngine detectionEngine,
@@ -305,8 +301,8 @@ namespace Sentinel.Core
                                 RuleName = "Token Theft: SeImpersonatePrivilege from Suspicious Path",
                                 Evidence = $"Process '{processName}' (PID {pid}) at '{Truncate(imagePath, 120)}' has SeImpersonatePrivilege enabled. " +
                                            $"Running from a user-writable path - weak potato-class indicator only.",
-                                Reasoning = "SeImpersonatePrivilege from a user-writable path can indicate potato tools " +
-                                            "(GodPotato, JuicyPotato, PrintSpoofer) but is also normal for many portable apps. " +
+                                Reasoning = "SeImpersonatePrivilege from a user-writable path can indicate potato-class " +
+                                            "privilege-escalation tools but is also normal for many portable apps. " +
                                             "Observe-first: LogOnly until confirmed (SYSTEM token theft, token-theft modules, composite).",
                                 Confidence = 0.55,
                                 Tier = DetectionTier.Tier2Indicator,

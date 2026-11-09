@@ -670,7 +670,7 @@ namespace Sentinel.Core
         // 35+ known remote access tools - both legitimate and commonly abused.
         // TeamViewer / AnyDesk / mstsc / cloudflared stay LogOnly (the 90).
         // ngrok / chisel / frpc / tailcat-class tunnels are kill-grade (v2.5.3).
-        private static readonly string[] RemoteAccessProcessNames =
+        private static readonly string[] RemoteAccessProcessNames = new[]
         {
             // Commercial remote desktop/support
             "teamviewer", "teamviewer_service", "tv_w32", "tv_x64",
@@ -698,9 +698,12 @@ namespace Sentinel.Core
             "ngrok", "frpc", "frps", "cloudflared", // Tunneling
             "chisel", "rathole", "bore", // Reverse tunnels
             "tailcat", "derper", "wireproxy", "onetun", "boringtun", // userspace WG / magicsock
-            "innernet", "sliver",
+            "innernet",
             "mstsc", // Standard RDP client - context matters
-        };
+        }.Concat(IndicatorCatalog.Lower("remoteAccess.implantNames")).ToArray();
+
+        // Implant names live in the compressed indicator resource (see IndicatorCatalog).
+        private static readonly string[] ImplantTunnelNames = IndicatorCatalog.Lower("remoteAccess.implantNames");
 
         public RemoteAccessMonitor(DetectionEngine de, ILogger<RemoteAccessMonitor> l) { _detectionEngine = de; _logger = l; }
 
@@ -739,7 +742,7 @@ namespace Sentinel.Core
                                                 name.Contains("tailcat") || name.Contains("wireproxy") ||
                                                 name.Contains("onetun") || name.Contains("boringtun") ||
                                                 name.Contains("innernet") || name.Contains("derper") ||
-                                                name.Contains("sliver");
+                                                ImplantTunnelNames.Any(name.Contains);
 
                                 string? imagePath = null;
                                 try { imagePath = SecurityValidation.GetProcessImagePath(proc.Id); } catch { }

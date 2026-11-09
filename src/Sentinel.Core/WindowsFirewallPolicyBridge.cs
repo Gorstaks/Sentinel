@@ -19,6 +19,7 @@ namespace Sentinel.Core
     /// <summary>Fixed, embedded NetSecurity management code; no caller-supplied script or domain store.</summary>
     public sealed class WindowsFirewallPolicyBridge : IWindowsFirewallPolicyBridge
     {
+        internal const string FirewallScriptResource = "Sentinel.Core.PolicyResources.LocalFirewallPolicy.bin";
         private readonly string _installDirectory;
         private readonly ManagementChildRegistry? _managementChildren;
         public WindowsFirewallPolicyBridge(string? installDirectory = null, ManagementChildRegistry? managementChildren = null)
@@ -84,19 +85,18 @@ namespace Sentinel.Core
                 // Script goes over stdin to avoid Windows' command-line size limit. The short
                 // bootstrap is constant; user/rule names are only JSON data in a child environment.
                 const string bootstrap = "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; [Console]::InputEncoding=[Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); try { $request=$env:SENTINEL_FIREWALL_REQUEST | ConvertFrom-Json; Remove-Item Env:SENTINEL_FIREWALL_REQUEST; Import-Module (Join-Path $request.SystemDirectory 'WindowsPowerShell\\v1.0\\Modules\\NetSecurity\\NetSecurity.psd1') -ErrorAction Stop; . ([ScriptBlock]::Create([Console]::In.ReadToEnd().TrimStart([char]0xFEFF))); Invoke-SentinelFirewallPolicy $request | ConvertTo-Json -Compress -Depth 8 } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }";
-                var start = new ProcessStartInfo
-                {
-                    FileName = Path.Combine(launchSystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
-                    Arguments = "-NoLogo -NoProfile -NonInteractive -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes(bootstrap)),
-                    UseShellExecute = false, CreateNoWindow = true,
-                    RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-                    StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
-                };
+                // The bootstrap is a compile-time constant with no caller data, so it is passed as a
+                // plain -Command (no -EncodedCommand, which sandbox engines score as dropper behaviour).
+                var start = ConstantPowerShell.CreateStartInfoForPath(
+                    Path.Combine(launchSystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"), bootstrap);
+                start.RedirectStandardInput = true;
+                start.RedirectStandardOutput = true;
+                start.RedirectStandardError = true;
+                start.StandardOutputEncoding = Encoding.UTF8;
+                start.StandardErrorEncoding = Encoding.UTF8;
                 start.EnvironmentVariables["SENTINEL_FIREWALL_REQUEST"] = request;
-                using var resource = typeof(WindowsFirewallPolicyBridge).Assembly.GetManifestResourceStream("Sentinel.Core.PolicyResources.LocalFirewallPolicy.ps1")
-                    ?? throw new InvalidOperationException("Embedded firewall policy script is missing");
-                using var scriptReader = new StreamReader(resource, Encoding.UTF8);
-                var script = await scriptReader.ReadToEndAsync().ConfigureAwait(false);
+                // Embedded deflate-compressed (see Sentinel.Core.csproj CompressedResource).
+                var script = IndicatorCatalog.ReadText(FirewallScriptResource);
                 using var child = Process.Start(start) ?? throw new InvalidOperationException("Could not start Windows firewall management");
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 // Initial Windows inventories can contain hundreds of rules and CIM filter reads.

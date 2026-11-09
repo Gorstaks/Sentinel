@@ -144,27 +144,9 @@ namespace Sentinel.Core
                 "Vulnerable Kernel", "Bring Your Own",
                 "NSecKrnl", "ensrvr64", "encase", "PoisonX",
             }),
-            ("CredentialDump", new[]
-            {
-                "LSASS", "Credential Dump", "Credential Theft", "Mimikatz", "sekurlsa",
-                "procdump", "comsvcs", "MiniDump", "DumpCred", "SAM hive", "SECURITY hive",
-                "ntds.dit", "DCSync", "secretsdump", "Credential Canary",
-            }),
-            ("TokenTheft", new[]
-            {
-                "Token Theft", "Token Stealing", "SYSTEM Token", "Impersonat",
-                "SeImpersonate", "DuplicateToken", "MakeToken", "GodPotato", "PrintSpoofer",
-                "Potato", "JuicyPotato", "RoguePotato", "SharpEfsPotato",
-                "FudModule", "LegacyHive",
-                "Kernel Exploit Loader", "Installer EoP", "AlwaysInstallElevated",
-                "LPE Scaffold: Privilege Escalation Tool",
-            }),
-            ("ReverseShell", new[]
-            {
-                "Reverse Shell", "Bind Shell", "Interactive Shell", "pty.spawn",
-                "socket.dup", "nc -e", "ncat", "revshell", "meterpreter",
-                "ClickFix Encoded",
-            }),
+            ("CredentialDump", IndicatorCatalog.List("terminal.CredentialDump")),
+            ("TokenTheft", IndicatorCatalog.List("terminal.TokenTheft")),
+            ("ReverseShell", IndicatorCatalog.List("terminal.ReverseShell")),
             ("Exfil", new[]
             {
                 "Exfil", "Exfiltration", "Data Staging", "Cloud Sync Exfil",

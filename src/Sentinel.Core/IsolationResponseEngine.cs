@@ -59,24 +59,16 @@ namespace Sentinel.Core
             }
 
             // 2. Dismount the ISO via PowerShell Dismount-DiskImage
-            // SECURITY v1.4.4: Use -EncodedCommand to prevent command injection via crafted ISO filenames.
-            // Previously interpolated isoPath directly into a PowerShell -Command string - a filename
-            // containing embedded single quotes could break out and execute arbitrary commands as SYSTEM.
+            // SECURITY: the ISO path is attacker-influenced. It is passed only as an environment
+            // variable to a constant command, so a crafted filename can never be parsed as code.
+            // (Replaces v1.4.4 -EncodedCommand; same safety without the encoded launch.)
             try
             {
-                var script = $"Dismount-DiskImage -ImagePath '{isoPath.Replace("'", "''")}' -ErrorAction Stop";
-                var encodedScript = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
-                var dismountArgs = $"-NoProfile -NonInteractive -EncodedCommand {encodedScript}";
                 using var dismount = new Process();
-                dismount.StartInfo = new ProcessStartInfo
-                {
-                    FileName = "powershell.exe",
-                    Arguments = dismountArgs,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
+                dismount.StartInfo = ConstantPowerShell.CreateStartInfo(
+                    "Dismount-DiskImage -ImagePath $env:SENTINEL_ARG_0 -ErrorAction Stop", isoPath);
+                // Only stderr is read; stdout is not redirected so an unread pipe cannot block the child.
+                dismount.StartInfo.RedirectStandardError = true;
 
                 dismount.Start();
                 var stderr = await dismount.StandardError.ReadToEndAsync();
@@ -284,23 +276,14 @@ namespace Sentinel.Core
         {
             try
             {
-                // SECURITY v1.4.4: Use -EncodedCommand to prevent command injection via crafted VM names.
-                // Previously interpolated vmName directly into a PowerShell -Command string.
-                // While IsValidVmName() validates characters, -EncodedCommand eliminates the attack
-                // surface entirely - no parsing of the command string by PowerShell's evaluator.
-                var script = $"Stop-VM -Name '{vmName.Replace("'", "''")}' -TurnOff -Force -ErrorAction Stop";
-                var encodedScript = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
-                var args = $"-NoProfile -NonInteractive -EncodedCommand {encodedScript}";
+                // SECURITY: the VM name is passed only as an environment variable to a constant
+                // command, so it is never parsed by PowerShell's evaluator (in addition to
+                // IsValidVmName). Replaces v1.4.4 -EncodedCommand with the same safety.
                 using var ps = new Process();
-                ps.StartInfo = new ProcessStartInfo
-                {
-                    FileName = "powershell.exe",
-                    Arguments = args,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
+                ps.StartInfo = ConstantPowerShell.CreateStartInfo(
+                    "Stop-VM -Name $env:SENTINEL_ARG_0 -TurnOff -Force -ErrorAction Stop", vmName);
+                // Only stderr is read; stdout is not redirected so an unread pipe cannot block the child.
+                ps.StartInfo.RedirectStandardError = true;
 
                 ps.Start();
                 var stderr = await ps.StandardError.ReadToEndAsync();

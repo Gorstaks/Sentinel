@@ -40,38 +40,7 @@ namespace Sentinel.Core
         private readonly HashSet<string> _alertedPipes = new(StringComparer.OrdinalIgnoreCase);
 
         // Known-bad pipe name patterns (C2 frameworks, lateral movement, priv-esc tools)
-        private static readonly Regex[] KnownBadPatterns = new[]
-        {
-            // Cobalt Strike default named pipes (high-entropy 1-4 digit suffix)
-            new Regex(@"^msagent_[a-f0-9]{2,8}$", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-            new Regex(@"^MSSE-[0-9]{1,4}-server$", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-            new Regex(@"^postex_[a-f0-9]+$", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-            new Regex(@"^postex_ssh_[a-f0-9]+$", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-            new Regex(@"^status_[a-f0-9]{2,8}$", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-            new Regex(@"^msagent_[a-f0-9]{2,8}$", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-            // Cobalt Strike: single letter + short digits
-            new Regex(@"^[ms][a-z]{4,8}[0-9]{1,4}$", RegexOptions.Compiled),
-
-            // PsExec / Impacket lateral movement
-            new Regex(@"^psexecsvc(-[a-z0-9]+)?$", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-            new Regex(@"^svcctl$", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-            new Regex(@"^RemCom_(stdin|stdout|stderr)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-            new Regex(@"^csexec_[a-f0-9]+$", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-
-            // Metasploit Meterpreter
-            new Regex(@"^meterpreter_", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-            new Regex(@"^msf_", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-
-            // Sliver C2
-            new Regex(@"^sliver_", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-
-            // Havoc C2
-            new Regex(@"^havoc_[a-f0-9]+$", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-
-            // Generic high-confidence C2 pipe patterns
-            new Regex(@"^[a-f0-9]{32,}$", RegexOptions.Compiled), // Pure hex GUID-like (32+ chars)
-            new Regex(@"^(pipe_)?[a-z]{1,3}[0-9]{6,}$", RegexOptions.Compiled), // Short prefix + many digits
-        };
+        private static readonly Regex[] KnownBadPatterns = IndicatorCatalog.List("namedPipe.knownBadPatterns").Select(p => new Regex(p, RegexOptions.Compiled | RegexOptions.IgnoreCase)).ToArray();
 
         // Well-known legitimate pipe patterns to never alert on
         private static readonly HashSet<string> LegitimatePatterns = new(StringComparer.OrdinalIgnoreCase)
@@ -203,7 +172,7 @@ namespace Sentinel.Core
                     {
                         RuleName = "Named Pipe: Known C2/Lateral Movement Pattern",
                         Evidence = $"Suspicious named pipe detected: '\\\\.\\.\\pipe\\{pipeName}' (owner PID {ownerPid} [{ownerName}]). Matched pattern: {matchedPattern}",
-                        Reasoning = "A named pipe matching a known C2 framework or lateral movement tool pattern was created. This is commonly used by Cobalt Strike, PsExec, Impacket, Metasploit, and other attack tools for inter-process communication.",
+                        Reasoning = "A named pipe matching a known C2 framework or lateral movement tool pattern was created. Post-exploitation frameworks and remote-execution tools use these default pipe names for inter-process communication.",
                         Confidence = 0.86,
                         Tier = DetectionTier.Tier1Behavioral,
                         AuthorizedResponse = ResponseAction.KillProcessTree,
