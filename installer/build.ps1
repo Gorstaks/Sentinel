@@ -142,7 +142,6 @@ $ExploitShieldOut = Join-Path $PublishDir "exploitshield"
 & $Dotnet publish $ExploitShieldProj -c Release -f net48-windows -o $ExploitShieldOut
 if ($LASTEXITCODE -ne 0) { throw "ExploitShield publish failed" }
 
-# NanoAV coverage now ships in Sentinel.Core; no independent response executable.
 
 # 3a. Icon + version.txt
 Write-Host "Deploying Sentinel.ico and version.txt..." -ForegroundColor Yellow

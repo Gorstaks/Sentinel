@@ -1,6 +1,16 @@
 # Changelog
 
-## [3.6.9] - 2026-11-07
+## [3.7.0] - 2026-11-09
+
+### Removed
+- **Standalone NanoAV source removed.** `modules/NanoAV` (27 files, the archived upstream source plus its `UPSTREAM.json` provenance manifest) is deleted from the repository. NanoAV coverage has been integrated into Sentinel.Core since 3.4.5, so nothing built or ran from this folder. Git history keeps the removed files.
+- `tools/validation/VerifyNanoAVSource.py` and the "Verify original NanoAV source scope" step in `build.yml`, and the matching step in `release.yml`, which hashed that folder.
+- The NanoAV project entry and its configurations from `Sentinel.sln`.
+- The `SentinelCoexistencePaths.cs` link from `Sentinel.Tests.csproj`, and the tests that exercised that standalone-coexistence helper. `NanoAvCoexistenceTests` keeps its `SelfPathGuard` runtime checks.
+
+### Changed
+- `docs/NANOAV.md` and the project-state steering file describe the folder as removed.
+
 
 - Hardened security policy (GSecurity.inf)
 

@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using NanoAV;
 using Sentinel.Core;
 using Xunit;
 
@@ -8,49 +7,6 @@ namespace Sentinel.Tests;
 
 public sealed class NanoAvCoexistenceTests
 {
-    [Fact]
-    public void CoexistenceTestsDoNotLoadTheStandaloneScanner()
-    {
-        var assembly = typeof(NanoAvCoexistenceTests).Assembly;
-        Assert.Same(assembly, typeof(SentinelCoexistencePaths).Assembly);
-        Assert.DoesNotContain(assembly.GetReferencedAssemblies(), name => name.Name == "NanoAV");
-    }
-
-    [Theory]
-    [InlineData("Sentinel.Service.exe")]
-    [InlineData("Sentinel.Agent.exe")]
-    [InlineData("Sentinel.Core.dll")]
-    [InlineData("SentinelAutoRotate.exe")]
-    public void OriginalNanoAvGuardProtectsInstalledSentinelFiles(string name)
-    {
-        string root = Path.Combine(Path.GetTempPath(), "Sentinel-coexistence-install");
-        string data = Path.Combine(Path.GetTempPath(), "Sentinel-coexistence-data");
-        Assert.True(SentinelCoexistencePaths.IsProtectedResolvedPath(Path.Combine(root, name), root, data));
-        Assert.True(SentinelCoexistencePaths.IsProtectedResolvedPath(Path.Combine(data, "events.jsonl"), root, data));
-    }
-
-    [Theory]
-    [InlineData("Sentinel.Service.exe")]
-    [InlineData("Sentinel.Agent.exe")]
-    [InlineData("NanoAV.exe")]
-    [InlineData("ordinary.exe")]
-    public void MatchingNamesOutsideSentinelKeepOriginalNanoAvPolicy(string name)
-    {
-        string root = Path.Combine(Path.GetTempPath(), "Sentinel-coexistence-install");
-        string data = Path.Combine(Path.GetTempPath(), "Sentinel-coexistence-data");
-        Assert.False(SentinelCoexistencePaths.IsProtectedResolvedPath(Path.Combine(root + "-other", name), root, data));
-        Assert.False(SentinelCoexistencePaths.IsProtectedResolvedPath(Path.Combine(root, "..", "outside", name), root, data));
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData(" ")]
-    [InlineData("Sentinel.Service.exe")]
-    public void RelativeNamesCannotBecomeAProtectedFile(string path)
-    {
-        Assert.False(SentinelCoexistencePaths.IsInside(path, Path.GetTempPath()));
-    }
-
     [WindowsContainmentFact]
     public void SentinelExemptsCoInstalledNanoAvButNotACopyElsewhere()
     {

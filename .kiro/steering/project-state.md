@@ -22,8 +22,8 @@ If history does not explain it, ask the owner - do not offer "restore it" as a d
 
 - **NanoAV is integrated into Sentinel.Core (3.4.5).** There is no separate NanoAV runtime, module
   build or installer step. `installer/retire-nanoav.ps1` and its CI migration smoke were removed on
-  purpose. `modules/NanoAV` is archived, hash-locked source for review only
-  (`tools/validation/VerifyNanoAVSource.py`); never edit or build it as a product component.
+  purpose. The standalone source folder `modules/NanoAV` was removed in 3.7.0 and must not be recreated
+  (its verification script was removed with it).
 - **GVPN is a separate project (3.6.8)** in `D:\Gorstak\GVPN` with its own repo, versioning and
   installer. Sentinel does not build, bundle, install, start or control any VPN and has no VPN
   response action. `ResponseAction.VpnShieldUp` is an `[Obsolete]` numeric slot kept only for
