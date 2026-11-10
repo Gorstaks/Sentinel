@@ -254,30 +254,29 @@ namespace Sentinel.Core
                 _logger.LogWarning("[LnkShortcutMonitor] MALICIOUS .lnk detected: {Path} -> {Target} | Args={Args}",
                     lnkPath, target, args);
 
-                // Attempt to quarantine the malicious shortcut
-                try
-                {
-                    _ = _quarantineManager.QuarantineFileAtomicAsync(lnkPath);
-                    _logger.LogInformation("[LnkShortcutMonitor] Quarantined: {Path}", lnkPath);
-                }
-                catch (Exception qex)
-                {
-                    // Fallback: delete the shortcut if quarantine fails
-                    try
-                    {
-                        File.Delete(lnkPath);
-                        _logger.LogInformation("[LnkShortcutMonitor] Deleted malicious .lnk (quarantine failed): {Path}", lnkPath);
-                    }
-                    catch (Exception dex)
-                    {
-                        _logger.LogWarning("[LnkShortcutMonitor] Failed to remove malicious .lnk {Path}: quarantine={QError}, delete={DError}",
-                            lnkPath, qex.Message, dex.Message);
-                    }
-                }
+                // Quarantine the shortcut. The task is observed (never fire-and-forget) and there is no
+                // File.Delete fallback: a path delete as SYSTEM on a user-writable folder follows links (3.7.1).
+                _ = QuarantineShortcutAsync(lnkPath);
             }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "[LnkShortcutMonitor] Error analyzing {Path}", lnkPath);
+            }
+        }
+
+        private async Task QuarantineShortcutAsync(string lnkPath)
+        {
+            try
+            {
+                var vaultPath = await _quarantineManager.QuarantineFileAtomicAsync(lnkPath).ConfigureAwait(false);
+                if (vaultPath != null)
+                    _logger.LogInformation("[LnkShortcutMonitor] Quarantined: {Path}", lnkPath);
+                else
+                    _logger.LogWarning("[LnkShortcutMonitor] Quarantine refused for {Path} (link, hard link or protected path); left in place", lnkPath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[LnkShortcutMonitor] Failed to quarantine malicious .lnk {Path}", lnkPath);
             }
         }
 

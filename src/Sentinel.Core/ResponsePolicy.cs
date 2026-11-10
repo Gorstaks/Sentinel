@@ -754,9 +754,15 @@ namespace Sentinel.Core
             if (!InstallerHeuristics.IsValidPathHint(filePath)) filePath = null;
 
             // Any signal from a DirectX/redist process is observe-only noise (never Tier1/composite).
+            // 3.7.1: the name/leaf heuristics are attacker-controlled, so they demote only when the
+            // process image is anchored (trusted install root or valid signature) or the written
+            // file really sits in the Windows system directory.
             if (InstallerHeuristics.IsDirectXOrRuntimeRedist(detection.ProcessName, imagePath) ||
                 InstallerHeuristics.IsDirectXOrRuntimeRedist(detection.ProcessName, filePath))
-                return true;
+            {
+                if (IsInstallerEvidenceAnchored(detection, imagePath) || IsFileInRealSystemDirectory(filePath))
+                    return true;
+            }
 
             var r = detection.RuleName ?? "";
             foreach (var f in BenignNoiseRuleFragments)
@@ -769,7 +775,7 @@ namespace Sentinel.Core
             bool installerContext =
                 InstallerHeuristics.IsInstallerExtractor(detection.ProcessName, imagePath) ||
                 InstallerHeuristics.LooksLikeInstallerName(detection.ProcessName, imagePath);
-            if (installerContext)
+            if (installerContext && IsInstallerEvidenceAnchored(detection, imagePath))
             {
                 foreach (var f in InstallerContextWeakRuleFragments)
                 {
@@ -779,9 +785,10 @@ namespace Sentinel.Core
             }
 
             // System32/SysWOW64 writes of GPU/DirectX/runtime names = Steam/driver redist race.
+            // 3.7.1: anchored to the REAL system directory. A substring match let
+            // C:\Users\x\AppData\Local\Temp\System32\d3d\a.exe qualify.
             var path = filePath ?? "";
-            if (path.IndexOf(@"\System32\") >= 0 ||
-                path.IndexOf(@"\SysWOW64\") >= 0)
+            if (IsFileInRealSystemDirectory(path))
             {
                 if (InstallerHeuristics.IsDirectXOrRuntimeRedist(detection.ProcessName, path))
                     return true;
@@ -813,6 +820,58 @@ namespace Sentinel.Core
                 return true;
 
             return false;
+        }
+
+        private static string SafeFullPath(string path)
+        {
+            try { return Path.GetFullPath(path); }
+            catch (ArgumentException) { return string.Empty; }
+            catch (NotSupportedException) { return string.Empty; }
+        }
+
+        /// <summary>True only when the path is inside the real %windir%\System32 or SysWOW64 tree.</summary>
+        internal static bool IsFileInRealSystemDirectory(string? path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            try
+            {
+                var full = Path.GetFullPath(path!);
+                var win = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+                if (string.IsNullOrEmpty(win)) return false;
+                var root = win.TrimEnd('\\') + "\\";
+                return full.StartsWith(root + "System32\\", StringComparison.OrdinalIgnoreCase) ||
+                       full.StartsWith(root + "SysWOW64\\", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (ArgumentException) { return false; }
+            catch (NotSupportedException) { return false; }
+        }
+
+        /// <summary>
+        /// Anchor for installer/redist name heuristics: the process image must live under Windows or
+        /// Program Files, or carry a valid Authenticode signature. Unattributed events (PID &lt;= 4) have
+        /// no process to anchor and rely on file-location anchoring instead. Fails closed.
+        /// </summary>
+        internal static bool IsInstallerEvidenceAnchored(DetectionEvent detection, string? imagePathHint)
+        {
+            if (detection.ProcessId <= 4) return false;
+            string? image;
+            try { image = SecurityValidation.GetProcessImagePath(detection.ProcessId); }
+            catch (Exception) { image = null; }
+            if (string.IsNullOrEmpty(image))
+            {
+                // The process has already exited (self-deleting installer stubs usually have). Fall back
+                // to the image path the monitor recorded at process start, but accept it only under a
+                // protected install root: a drop folder is never an anchor, and without the file there
+                // is no signature to check.
+                if (string.IsNullOrEmpty(imagePathHint) || !InstallerHeuristics.IsValidPathHint(imagePathHint)) return false;
+                return ChainTracer.IsSystemBinary(imagePathHint, detection.ProcessName ?? "") ||
+                       InstallDirectoryPolicy.IsUnderProgramFiles(SafeFullPath(imagePathHint!));
+            }
+            // A live process: the OS-recorded image wins over any monitor-supplied hint.
+            if (ChainTracer.IsSystemBinary(image, detection.ProcessName ?? "")) return true;
+            if (InstallDirectoryPolicy.IsUnderProgramFiles(image!)) return true;
+            try { return SecurityValidation.VerifyAuthenticodeSignature(image!); }
+            catch (Exception) { return false; }
         }
 
         /// <summary>
@@ -1345,7 +1404,11 @@ namespace Sentinel.Core
 
                 // Stop walking at widely-shared system ancestors - these would cross-
                 // contaminate unrelated processes.
-                if (ExcludedAncestryRoots.Contains(parentName))
+                // 3.7.1: the NAME alone is attacker-controlled. A loader called svchost.exe in a
+                // user-writable folder must not end the walk (and so split its own signal chain).
+                // The name is honored only when the resolved image really is a Windows system binary;
+                // an unreadable image (protected process) keeps the previous behavior.
+                if (ExcludedAncestryRoots.Contains(parentName) && IsGenuineSystemAncestor(parentId, parentName))
                     break;
 
                 // Accept this as a candidate root (non-excluded, non-trivial PID).
@@ -1355,6 +1418,19 @@ namespace Sentinel.Core
 
             return candidate;
         }
+
+        private static bool IsGenuineSystemAncestor(int pid, string name)
+        {
+            string? path;
+            try { path = SecurityValidation.GetProcessImagePath(pid); }
+            catch (Exception) { return true; }
+            if (string.IsNullOrEmpty(path)) return true;
+            return IsGenuineSystemImage(path!, name);
+        }
+
+        /// <summary>True when the image path is a real Windows system binary (not a drop folder inside the tree).</summary>
+        internal static bool IsGenuineSystemImage(string imagePath, string name)
+            => ChainTracer.IsSystemBinary(imagePath, name);
 
         private static void TryLazySweep(int chainWindowSeconds)
         {

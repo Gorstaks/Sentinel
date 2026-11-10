@@ -339,8 +339,10 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public async Task HandleAsync_RemoveRegistryEntry_Tier1_ExecutesRemoval()
+        public async Task HandleAsync_RemoveRegistryEntry_RefusesKeysOutsideTheAllowlist()
         {
+            // 3.7.1: the executor used to delete whatever key the metadata named. An arbitrary key is
+            // now refused and left in place (RegistryRemovalPolicy).
             string fixtureKey = @"Software\SentinelReceiptTests\" + Guid.NewGuid().ToString("N");
             using (var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(fixtureKey)) key.SetValue("Fixture", "test");
             try
@@ -363,15 +365,94 @@ namespace Sentinel.Tests
 
                 var execution = await _engine.HandleAsync(detection);
 
+                Assert.NotEqual(ResponseExecutionStatus.Verified, execution.Status);
+                Assert.False(execution.VerifiesRequestedAction);
+                using var readBack = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(fixtureKey);
+                Assert.Contains("Fixture", readBack!.GetValueNames());
+                Assert.Contains("Refused registry value removal", ReadLog());
+            }
+            finally { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(fixtureKey, false); }
+        }
+
+        [Fact]
+        public async Task HandleAsync_RemoveRegistryEntry_Tier1_ExecutesRemoval()
+        {
+            // Allowed root (HKCU Run) with a value whose live data still matches what was observed.
+            const string fixtureKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+            string valueName = "SentinelReceiptTest_" + Guid.NewGuid().ToString("N");
+            string valueData = @"C:\Users\Public\sentinel-fixture-" + Guid.NewGuid().ToString("N") + ".exe";
+            using (var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(fixtureKey)) key.SetValue(valueName, valueData);
+            try
+            {
+                var detection = new DetectionEvent
+                {
+                    RuleName = "Persistence: Malicious Scheduled Task",
+                    Confidence = 0.85,
+                    Tier = DetectionTier.Tier1Behavioral,
+                    AuthorizedResponse = ResponseAction.RemoveRegistryEntry,
+                    ProcessName = "malware.exe",
+                    ProcessId = 5555,
+                    Metadata = new Dictionary<string, string>
+                    {
+                        { "Hive", "HKCU" },
+                        { "KeyPath", fixtureKey },
+                        { "ValueName", valueName },
+                        { "ValueData", valueData }
+                    }
+                };
+
+                var execution = await _engine.HandleAsync(detection);
+
                 var log = ReadLog();
                 Assert.Equal(ResponseExecutionStatus.Verified, execution.Status);
                 Assert.True(execution.VerifiesRequestedAction);
                 using var readBack = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(fixtureKey);
                 Assert.NotNull(readBack);
-                Assert.DoesNotContain("Fixture", readBack!.GetValueNames());
+                Assert.DoesNotContain(valueName, readBack!.GetValueNames());
                 Assert.Contains("REMOVE_REGISTRY_ENTRY", log);
             }
-            finally { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(fixtureKey, false); }
+            finally
+            {
+                // Only the fixture value is removed; the user's real Run key is left intact.
+                using var run = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(fixtureKey, writable: true);
+                run?.DeleteValue(valueName, throwOnMissingValue: false);
+            }
+        }
+
+        [Fact]
+        public async Task HandleAsync_RemoveRegistryEntry_RefusesWhenLiveValueChangedSinceObservation()
+        {
+            const string fixtureKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+            string valueName = "SentinelReceiptTest_" + Guid.NewGuid().ToString("N");
+            using (var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(fixtureKey)) key.SetValue(valueName, @"C:\Users\Public\now-different.exe");
+            try
+            {
+                var detection = new DetectionEvent
+                {
+                    RuleName = "Registry: Suspicious Autorun Entry",
+                    Confidence = 0.85,
+                    Tier = DetectionTier.Tier1Behavioral,
+                    AuthorizedResponse = ResponseAction.RemoveRegistryEntry,
+                    ProcessName = "malware.exe",
+                    ProcessId = 5555,
+                    Metadata = new Dictionary<string, string>
+                    {
+                        { "Hive", "HKCU" }, { "KeyPath", fixtureKey }, { "ValueName", valueName },
+                        { "ValueData", @"C:\Users\Public\what-the-monitor-saw.exe" }
+                    }
+                };
+
+                var execution = await _engine.HandleAsync(detection);
+
+                Assert.False(execution.VerifiesRequestedAction);
+                using var readBack = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(fixtureKey);
+                Assert.Contains(valueName, readBack!.GetValueNames());
+            }
+            finally
+            {
+                using var run = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(fixtureKey, writable: true);
+                run?.DeleteValue(valueName, throwOnMissingValue: false);
+            }
         }
 
         [Fact]

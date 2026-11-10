@@ -1,16 +1,16 @@
 [Setup]
 AppName=Sentinel
-AppVersion=3.7.0
+AppVersion=3.7.1
 AppPublisher=Gorstak
 AppPublisherURL=https://gorstak.eu
 AppCopyright=Copyright (C) 2026 Gorstak
-VersionInfoVersion=3.7.0.0
+VersionInfoVersion=3.7.1.0
 VersionInfoCompany=Gorstak
 VersionInfoDescription=Sentinel Endpoint Detection and Response Setup
 VersionInfoCopyright=Copyright (C) 2026 Gorstak
 VersionInfoProductName=Sentinel EDR
-VersionInfoProductVersion=3.7.0.0
-VersionInfoOriginalFileName=SentinelSetup-3.7.0.exe
+VersionInfoProductVersion=3.7.1.0
+VersionInfoOriginalFileName=SentinelSetup-3.7.1.exe
 SourceDir=.
 DefaultDirName={autopf}\Sentinel
 DefaultGroupName=Sentinel
@@ -20,10 +20,13 @@ UninstallDisplayIcon={app}\Sentinel.ico
 Compression=lzma/max
 SolidCompression=no
 OutputDir=.
-OutputBaseFilename=SentinelSetup-3.7.0
+OutputBaseFilename=SentinelSetup-3.7.1
 PrivilegesRequired=admin
 SetupMutex=Global\SentinelSetupMutex
 UsePreviousAppDir=yes
+; 3.7.1: the service runs as LocalSystem from {app}. The install directory is fixed to a protected
+; Program Files location (no directory page); PrepareToInstall also rejects a previously chosen custom path.
+DisableDirPage=yes
 CloseApplications=no
 RestartApplications=no
 
@@ -258,6 +261,18 @@ begin
     Result := ExpandConstant('{sys}\') + FileName;
 end;
 
+// True when Dir is under Program Files (64-bit or 32-bit). The service runs as LocalSystem from {app},
+// so a directory a standard user can write to would hand them SYSTEM (3.7.1).
+function IsProtectedInstallDir(const Dir: String): Boolean;
+var
+  L, Pf, Pf32: String;
+begin
+  L := Lowercase(RemoveBackslash(Dir)) + '\';
+  Pf := Lowercase(RemoveBackslash(ExpandConstant('{commonpf}'))) + '\';
+  Pf32 := Lowercase(RemoveBackslash(ExpandConstant('{commonpf32}'))) + '\';
+  Result := (Pos(Pf, L) = 1) or (Pos(Pf32, L) = 1);
+end;
+
 // Restore v2.3.7 upgrade unlock. Hardened installs add a Users Deny-Write on
 // {app}; admin accounts are in Users, so Inno cannot overwrite unins000.exe
 // (Access is denied). Window is admin Setup only; the service re-locks on start.
@@ -396,7 +411,10 @@ begin
   // [InstallDelete] removes {app}\GVPN.
   MigrateBundledGvpn();
 
-  ResetInstallDirAcls(ExpandConstant('{app}'));
+  if IsProtectedInstallDir(ExpandConstant('{app}')) then
+    ResetInstallDirAcls(ExpandConstant('{app}'))
+  else
+    Log('Sentinel: skipping recursive ACL reset on unprotected directory ' + ExpandConstant('{app}'));
   ResetInstallDirAcls(ExpandConstant('{commonpf}\Sentinel'));
   ResetInstallDirAcls(ExpandConstant('{commonpf32}\Sentinel'));
   ResetInstallDirAcls(ExpandConstant('{autopf}\Sentinel'));
@@ -413,6 +431,14 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   NeedsRestart := False;
+
+  if not IsProtectedInstallDir(ExpandConstant('{app}')) then
+  begin
+    Result := 'Sentinel runs as LocalSystem from its install folder, so it must be installed under Program Files. ' +
+      'The current install folder ('  + ExpandConstant('{app}') + ') is not a protected location. ' +
+      'Uninstall the existing copy and run setup again to install to Program Files.';
+    Exit;
+  end;
 
   if RegValueExists(HKLM, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Run', 'SentinelAgent') or
      RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\Sentinel') or

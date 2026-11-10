@@ -89,18 +89,40 @@ namespace Sentinel.Core
                 _logger.LogDebug(ex, "[IsolationResponse] Exception during ISO dismount for {IsoPath}", isoPath);
             }
 
-            // 3. Delete the .iso source file
+            // 3. Contain the .iso source file. 3.7.1: it is MOVED into the quarantine vault, never
+            // deleted outright (a legitimate game or installer image that trips one detection must
+            // stay recoverable), and only for a plain disk-image file with no link tricks.
             try
             {
                 if (File.Exists(isoPath))
                 {
-                    File.Delete(isoPath);
-                    _logger.LogWarning("[IsolationResponse] Deleted ISO file {IsoPath}", isoPath);
+                    var extension = Path.GetExtension(isoPath);
+                    var refusal = FileObjectSafety.RefusalReason(isoPath);
+                    if (!(string.Equals(extension, ".iso", StringComparison.OrdinalIgnoreCase) ||
+                          string.Equals(extension, ".img", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        _logger.LogWarning("[IsolationResponse] Not moving {IsoPath}: unexpected extension '{Extension}'", isoPath, extension);
+                    }
+                    else if (refusal != null)
+                    {
+                        _logger.LogWarning("[IsolationResponse] Not moving {IsoPath}: {Reason}", isoPath, refusal);
+                    }
+                    else
+                    {
+                        var vault = Path.Combine(
+                            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                            "Sentinel", "Quarantine");
+                        Directory.CreateDirectory(vault);
+                        var safeName = System.Text.RegularExpressions.Regex.Replace(Path.GetFileName(isoPath), @"[^a-zA-Z0-9_\-\.]", "_");
+                        var target = Path.Combine(vault, "iso_" + Guid.NewGuid().ToString("N") + "_" + safeName + ".quarantined");
+                        File.Move(isoPath, target);
+                        _logger.LogWarning("[IsolationResponse] Moved ISO file {IsoPath} to quarantine vault {Target}", isoPath, target);
+                    }
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "[IsolationResponse] Failed to delete ISO file {IsoPath}", isoPath);
+                _logger.LogWarning(ex, "[IsolationResponse] Failed to move ISO file {IsoPath} to the vault", isoPath);
             }
 
             stopwatch.Stop();

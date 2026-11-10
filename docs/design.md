@@ -548,8 +548,8 @@ Emitted as Tier1 `DetectionEvent`s directly via `EmitAsync`. Requires signals fr
 | `KillProcessTree` | Same as above but walks and kills entire process tree |
 | `Quarantine` | DPAPI-encrypted file quarantine to `%ProgramData%\Sentinel\Quarantine` (<=128 MB; OS-critical paths refused; Interactive browse-only on the folder) |
 | `QuarantineAndKill` | Kill process + quarantine binary + place lock file |
-| `RemoveRegistryEntry` | Removes malicious autorun/service/COM entries |
-| `DismountVolume` | Dismounts ISO/VHD/SUBST drives hosting threats |
+| `RemoveRegistryEntry` | Removes malicious autorun/service/COM entries, only at the exact roots in `RegistryRemovalPolicy` and only while the live value still matches the observation (3.7.1) |
+| `DismountVolume` | Dismounts ISO/VHD drives hosting threats; the backing `.iso`/`.img` is moved to the vault, not deleted (3.7.1). SUBST drives are dismounted by `VolumeMountMonitor`, which reports creator/persistence candidates as Tier2 and kills nothing |
 | `RemoveCert` | Removes explicitly distrust-listed certificates, subject to authorization and store outcome verification |
 | `RemoveCertAndKillAdder` | Removes planted certificate + kills the process that installed it (BYOVD cert-trace) |
 
@@ -979,7 +979,7 @@ Honest remediations. Several 2.1.8 "fixes" were not in force until this version.
 
 | Item | Reality in 2.2.0 |
 |------|------------------|
-| Dashboard auth | `LoopbackDashboardAuth` - Authorization Bearer or `?token=`. Referer is ignored. Token is **not** in `GET /`. Tray opens `DashboardLaunchUrl`. |
+| Dashboard auth | `LoopbackDashboardAuth` - Authorization Bearer for `/api/*`; `?token=` only for `GET /` and `/ws/events`. Referer is ignored. 3.7.1: the token is never embedded in HTML; a bare `GET /` gets a secret-free bootstrap page. `DashboardRequestGuard` pins `Host`/`Origin` and supplies the CSP. Tray opens `DashboardLaunchUrl`. |
 | V217 monitors | Registered in MonitorGroups (see inventory above). Dead code until 2.2.0. |
 | Honeypot DLLs | `{install}\honeypot\` only - never `version.dll` next to Sentinel.exe |
 | EDR-killer names | LogOnly observe fuel, not President's Law |

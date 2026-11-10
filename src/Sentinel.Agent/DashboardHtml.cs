@@ -9,14 +9,13 @@ namespace Sentinel.Agent
     /// </summary>
     public static class DashboardHtml
     {
-        public static string GetHtml(string? embeddedToken = null) => $@"<!DOCTYPE html>
+        public static string GetHtml() => $@"<!DOCTYPE html>
 <html lang=""en"">
 <head>
 <meta charset=""UTF-8"">
 <meta http-equiv=""X-UA-Compatible"" content=""IE=edge"">
 <meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
 <title>Sentinel Dashboard</title>
-<script>var EMBEDDED_TOKEN = '{embeddedToken ?? ""}';</script>
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{
@@ -630,15 +629,10 @@ var eventPollInterval = null;
 }})();
 
 // v2.2.0: token arrives via tray launch URL (?token=), then lives in sessionStorage.
-// v2.3.1: server embeds current token in HTML (EMBEDDED_TOKEN) so page refresh always works.
+// 3.7.1: the token is never embedded in HTML; a refresh re-enters through the secret-free bootstrap page.
 function getToken() {{
     try {{
-        // 1. Prefer server-embedded token (always current after agent restart)
-        if (typeof EMBEDDED_TOKEN === 'string' && EMBEDDED_TOKEN.length > 0) {{
-            try {{ sessionStorage.setItem('sentinel_token', EMBEDDED_TOKEN); }} catch(e) {{}}
-            return EMBEDDED_TOKEN;
-        }}
-        // 2. URL ?token= param (tray icon launch)
+        // 1. URL ?token= param (tray icon launch)
         var search = window.location.search;
         var match = search.match(/[?&]token=([^&]*)/);
         if (match) {{

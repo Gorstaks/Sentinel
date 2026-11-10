@@ -227,8 +227,7 @@ namespace Sentinel.Core
         private static bool IsMicrosoftSubject(string subject)
         {
             if (string.IsNullOrEmpty(subject)) return false;
-            return subject.IndexOf("Microsoft", StringComparison.OrdinalIgnoreCase) >= 0
-                   || subject.IndexOf("Windows Publisher", StringComparison.OrdinalIgnoreCase) >= 0;
+            return MicrosoftPublisher.IsMicrosoftCommonName(subject);
         }
 
         private static string? TryGetEmbeddedSigner(string filePath)

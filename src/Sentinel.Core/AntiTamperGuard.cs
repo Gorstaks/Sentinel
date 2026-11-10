@@ -57,6 +57,12 @@ namespace Sentinel.Core
         // v2.1.7 RT-2026-H3: SHA-256 hash of own binary at startup for replacement detection
         private readonly string? _ownBinaryBaselineHash;
 
+        // 3.7.1: SHA-256 baseline of the other Sentinel binaries next to the service exe (Sentinel.Core.dll,
+        // Sentinel.Agent.exe, ...). Only the service exe was hashed before, so a swapped Core DLL went unnoticed.
+        private readonly Dictionary<string, string> _companionBaseline = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _companionAlerted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private bool _serviceImagePathAlerted;
+
         // HARDENING: QueryPerformanceCounter as secondary time source.
         // DateTime/DateTimeOffset can be manipulated by usermode time adjustment (SetSystemTime).
         // QPC is monotonic and hardware-driven - immune to clock skew attacks.
@@ -127,6 +133,7 @@ namespace Sentinel.Core
 
             // v2.1.7 RT-2026-H3: Capture SHA-256 hash of own binary at startup
             _ownBinaryBaselineHash = TryHashOwnBinary();
+            CaptureCompanionBaseline();
         }
 
         public override Task StartAsync(CancellationToken cancellationToken)
@@ -249,7 +256,9 @@ namespace Sentinel.Core
                     if (tickCounter % ticksPerCheck == 0)
                     {
                         await CheckBinaryIntegrity();
+                        await CheckCompanionBinaries();
                         await CheckServiceRegistration();
+                        await CheckServiceImagePath();
                         await CheckActiveResponseConfig();
                         await CheckEncryptedConfigIntegrity();
                         await CheckAndEnforceQosPolicies();
@@ -336,6 +345,125 @@ namespace Sentinel.Core
             {
                 _logger.LogDebug(ex, "[AntiTamperGuard] Error hashing binary for integrity check");
             }
+        }
+
+        private void CaptureCompanionBaseline()
+        {
+            try
+            {
+                if (_ownExePath == null) return;
+                var dir = Path.GetDirectoryName(_ownExePath);
+                if (string.IsNullOrEmpty(dir)) return;
+                foreach (var file in Directory.EnumerateFiles(dir!, "Sentinel*.*", SearchOption.TopDirectoryOnly))
+                {
+                    var ext = Path.GetExtension(file);
+                    if (!ext.Equals(".dll", StringComparison.OrdinalIgnoreCase) && !ext.Equals(".exe", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (string.Equals(file, _ownExePath, StringComparison.OrdinalIgnoreCase)) continue;
+                    var hash = TryHashFile(file);
+                    if (hash != null) _companionBaseline[file] = hash;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[AntiTamperGuard] Could not capture companion binary baseline");
+            }
+        }
+
+        private static string? TryHashFile(string path)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var sha = System.Security.Cryptography.SHA256.Create();
+                return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
+            }
+            catch (IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
+        }
+
+        private async Task CheckCompanionBinaries()
+        {
+            foreach (var entry in _companionBaseline.ToList())
+            {
+                var current = TryHashFile(entry.Key);
+                bool missing = current == null && !File.Exists(entry.Key);
+                if (current == null && !missing) continue; // transient lock; check again next cycle
+                if (!missing && string.Equals(current, entry.Value, StringComparison.Ordinal)) continue;
+                if (!_companionAlerted.Add(entry.Key)) continue;
+
+                await _detectionEngine.EmitAsync(new DetectionEvent
+                {
+                    RuleName = "Anti-Tamper: Sentinel Companion Binary Changed",
+                    Evidence = $"{Path.GetFileName(entry.Key)} was {(missing ? "removed" : "modified")} while Sentinel is running: {entry.Key}",
+                    Reasoning = "A Sentinel assembly next to the service executable changed on disk after startup. The next service start would load it as SYSTEM. " +
+                                "An in-place upgrade stops the service first, so a change while running is review-worthy. There is no single process to terminate, so this is a report.",
+                    Confidence = 0.90,
+                    Tier = DetectionTier.Tier2Indicator,
+                    AuthorizedResponse = ResponseAction.LogOnly,
+                    ProcessName = "SYSTEM",
+                    ProcessId = 0,
+                    SignalType = SignalType.AntiTamper,
+                    Metadata = new Dictionary<string, string>
+                    {
+                        ["BinaryPath"] = entry.Key,
+                        ["ExpectedHash"] = entry.Value,
+                        ["ActualHash"] = current ?? "missing"
+                    }
+                });
+            }
+        }
+
+        /// <summary>
+        /// 3.7.1: the registered service must still run THIS executable as LocalSystem. Existence and
+        /// start type alone passed a service whose binPath had been rewritten to another program.
+        /// </summary>
+        private async Task CheckServiceImagePath()
+        {
+            if (_serviceImagePathAlerted || _ownExePath == null) return;
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\" + ServiceName);
+                var imagePath = key?.GetValue("ImagePath")?.ToString();
+                if (string.IsNullOrEmpty(imagePath)) return;
+                if (ServiceImagePathMatches(imagePath!, _ownExePath)) return;
+
+                _serviceImagePathAlerted = true;
+                await _detectionEngine.EmitAsync(new DetectionEvent
+                {
+                    RuleName = "Anti-Tamper: Service ImagePath Changed",
+                    Evidence = $"Service '{ServiceName}' ImagePath is '{imagePath}' but the running executable is '{_ownExePath}'",
+                    Reasoning = "The service configuration points at a different program than the one running. On the next start that program would execute as SYSTEM. Reported for review; Sentinel does not rewrite service configuration it cannot attribute.",
+                    Confidence = 0.90,
+                    Tier = DetectionTier.Tier2Indicator,
+                    AuthorizedResponse = ResponseAction.LogOnly,
+                    ProcessName = "SYSTEM",
+                    ProcessId = 0,
+                    SignalType = SignalType.AntiTamper,
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[AntiTamperGuard] Service ImagePath check failed");
+            }
+        }
+
+        /// <summary>Compares the first token of the service command line (quoted or not) with the running exe path.</summary>
+        internal static bool ServiceImagePathMatches(string imagePath, string ownExePath)
+        {
+            var trimmed = imagePath.Trim();
+            string exe;
+            if (trimmed.StartsWith("\"", StringComparison.Ordinal))
+            {
+                var end = trimmed.IndexOf('"', 1);
+                exe = end > 0 ? trimmed.Substring(1, end - 1) : trimmed.Trim('"');
+            }
+            else
+            {
+                var space = trimmed.IndexOf(' ');
+                exe = space > 0 && !File.Exists(trimmed) ? trimmed.Substring(0, space) : trimmed;
+            }
+            try { return string.Equals(Path.GetFullPath(exe), Path.GetFullPath(ownExePath), StringComparison.OrdinalIgnoreCase); }
+            catch (ArgumentException) { return false; }
         }
 
         /// <summary>

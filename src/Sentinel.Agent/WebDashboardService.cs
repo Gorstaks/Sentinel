@@ -27,8 +27,9 @@ namespace Sentinel.Agent
         public const string DashboardUrl = "http://localhost:19845/";
 
         /// <summary>
-        /// v2.2.0: token is NOT embedded in GET /. Tray opens this URL; JS stores the
-        /// token in sessionStorage and strips it from the address bar.
+        /// The token is never embedded in an unauthenticated response. Tray opens this URL with
+        /// <c>?token=</c>; JS stores the token in sessionStorage and strips it from the address bar.
+        /// A bare GET / returns a secret-free bootstrap page (3.7.1).
         /// </summary>
         public static string? SessionToken { get; private set; }
 
@@ -147,13 +148,24 @@ namespace Sentinel.Agent
                     return;
                 }
 
+                // 3.7.1: DNS-rebinding / cross-origin defense. The Host header must name the
+                // loopback dashboard and a browser-supplied Origin must be the dashboard itself.
+                if (!DashboardRequestGuard.IsAllowedHost(request.UserHostName) ||
+                    !DashboardRequestGuard.IsAllowedOrigin(request.Headers["Origin"]))
+                {
+                    response.StatusCode = 403;
+                    response.Close();
+                    _logger.LogWarning("[WebDashboard] Rejected request with unexpected Host/Origin");
+                    return;
+                }
+
                 var path = request.Url?.AbsolutePath ?? "/";
                 var method = request.HttpMethod;
 
-                // WebSocket upgrade - v2.2.0: same bearer as /api (query ?token=).
+                // WebSocket upgrade - same bearer as /api (query ?token=, browsers cannot set headers).
                 if (request.IsWebSocketRequest && path == "/ws/events")
                 {
-                    if (!ValidateBearerToken(request, response))
+                    if (!ValidateBearerToken(request, response, allowQueryToken: true))
                         return;
                     try
                     {
@@ -192,16 +204,24 @@ namespace Sentinel.Agent
                 // Route
                 if (path == "/" || path == "/index.html")
                 {
-                    await ServeHtml(response).ConfigureAwait(false);
+                    // The full dashboard is served only to a caller that already holds the
+                    // launch token; everyone else gets the secret-free bootstrap page.
+                    if (LoopbackDashboardAuth.Authenticate(null, request.QueryString["token"], _bearerToken))
+                        await ServeHtml(response).ConfigureAwait(false);
+                    else
+                        await ServeBootstrap(response).ConfigureAwait(false);
                 }
                 else if (path == "/api/icon")
                 {
+                    // Static, secret-free asset loaded by an <img> tag (which cannot send a bearer
+                    // header). Still subject to the Host/Origin checks above.
                     await ServeIcon(response).ConfigureAwait(false);
                 }
                 else if (path.StartsWith("/api/"))
                 {
-                    // v2.2.0: Bearer (header or ?token=) is the only authenticator.
-                    // Referer is ignored - it is client-controlled on HttpListener.
+                    // Bearer in the Authorization header is the only authenticator for XHR.
+                    // Referer is ignored - it is client-controlled on HttpListener. The query
+                    // token is accepted only for GET / and the WebSocket upgrade (3.7.1).
                     if (!ValidateBearerToken(request, response))
                         return;
 
@@ -330,7 +350,7 @@ namespace Sentinel.Agent
             {
                 _logger.LogWarning(ex, "[WebDashboard] Failed to enumerate processes for module auditor");
                 response.StatusCode = 500;
-                await WriteJson(response, new { ok = false, error = ex.Message }).ConfigureAwait(false);
+                _logger.LogDebug(ex, "[WebDashboard] Request failed"); await WriteJson(response, new { ok = false, error = "operation_failed" }).ConfigureAwait(false);
             }
         }
 
@@ -353,7 +373,7 @@ namespace Sentinel.Agent
             {
                 _logger.LogWarning(ex, "[WebDashboard] Module audit failed");
                 response.StatusCode = 500;
-                await WriteJson(response, new { ok = false, error = ex.Message }).ConfigureAwait(false);
+                _logger.LogDebug(ex, "[WebDashboard] Request failed"); await WriteJson(response, new { ok = false, error = "operation_failed" }).ConfigureAwait(false);
             }
         }
 
@@ -361,8 +381,7 @@ namespace Sentinel.Agent
         {
             try
             {
-                using var reader = new StreamReader(request.InputStream, Encoding.UTF8);
-                var json = await reader.ReadToEndAsync().ConfigureAwait(false);
+                var json = await ReadBoundedBodyAsync(request).ConfigureAwait(false) ?? throw new ArgumentException("Request body too large.");
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
 
@@ -398,7 +417,7 @@ namespace Sentinel.Agent
             {
                 _logger.LogWarning(ex, "[WebDashboard] Module remediation failed");
                 response.StatusCode = 500;
-                await WriteJson(response, new { ok = false, error = ex.Message }).ConfigureAwait(false);
+                _logger.LogDebug(ex, "[WebDashboard] Request failed"); await WriteJson(response, new { ok = false, error = "operation_failed" }).ConfigureAwait(false);
             }
         }
 
@@ -431,8 +450,7 @@ namespace Sentinel.Agent
             }
             try
             {
-                using var reader = new StreamReader(request.InputStream, Encoding.UTF8);
-                var submitted = JsonSerializer.Deserialize<DnsRepairRequest>(await reader.ReadToEndAsync().ConfigureAwait(false))
+                var submitted = JsonSerializer.Deserialize<DnsRepairRequest>(await ReadBoundedBodyAsync(request, 4096).ConfigureAwait(false) ?? throw new ArgumentException("Request body too large."))
                     ?? throw new ArgumentException("Invalid DNS approval request.");
                 if (!Guid.TryParse(submitted.AdapterId, out _) || submitted.ExpectedFingerprint.Length != 64)
                     throw new ArgumentException("Inspect the adapter before requesting repair.");
@@ -456,7 +474,7 @@ namespace Sentinel.Agent
             }
             catch (Exception ex)
             {
-                await WriteJson(response, new { ok = false, error = ex.Message }).ConfigureAwait(false);
+                _logger.LogDebug(ex, "[WebDashboard] Request failed"); await WriteJson(response, new { ok = false, error = "operation_failed" }).ConfigureAwait(false);
             }
             finally { _dnsApprovalGate.Release(); }
         }
@@ -471,8 +489,7 @@ namespace Sentinel.Agent
         {
             try
             {
-                using var reader = new StreamReader(request.InputStream, Encoding.UTF8);
-                var json = await reader.ReadToEndAsync().ConfigureAwait(false);
+                var json = await ReadBoundedBodyAsync(request).ConfigureAwait(false) ?? throw new ArgumentException("Request body too large.");
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
 
@@ -505,7 +522,7 @@ namespace Sentinel.Agent
             {
                 _logger.LogWarning(ex, "[WebDashboard] Cert distrust remediation failed");
                 response.StatusCode = 500;
-                await WriteJson(response, new { ok = false, error = ex.Message }).ConfigureAwait(false);
+                _logger.LogDebug(ex, "[WebDashboard] Request failed"); await WriteJson(response, new { ok = false, error = "operation_failed" }).ConfigureAwait(false);
             }
         }
 
@@ -534,10 +551,10 @@ namespace Sentinel.Agent
         /// v2.2.0: Bearer token authentication. Referer is never accepted as proof of origin.
         /// Token comes from Authorization: Bearer or ?token= (WebSocket / tray launch URL).
         /// </summary>
-        private bool ValidateBearerToken(HttpListenerRequest request, HttpListenerResponse response)
+        private bool ValidateBearerToken(HttpListenerRequest request, HttpListenerResponse response, bool allowQueryToken = false)
         {
             var authHeader = request.Headers["Authorization"];
-            var queryToken = request.QueryString["token"];
+            var queryToken = allowQueryToken ? request.QueryString["token"] : null;
 
             if (LoopbackDashboardAuth.Authenticate(authHeader, queryToken, _bearerToken))
                 return true;
@@ -729,7 +746,7 @@ namespace Sentinel.Agent
             }
             catch (Exception ex)
             {
-                await WriteJson(response, new { ok = false, error = ex.Message }).ConfigureAwait(false);
+                _logger.LogDebug(ex, "[WebDashboard] Request failed"); await WriteJson(response, new { ok = false, error = "operation_failed" }).ConfigureAwait(false);
             }
         }
 
@@ -804,7 +821,7 @@ namespace Sentinel.Agent
             }
             catch (Exception ex)
             {
-                await WriteJson(response, new { ok = false, error = ex.Message }).ConfigureAwait(false);
+                _logger.LogDebug(ex, "[WebDashboard] Request failed"); await WriteJson(response, new { ok = false, error = "operation_failed" }).ConfigureAwait(false);
             }
         }
 
@@ -812,8 +829,7 @@ namespace Sentinel.Agent
         {
             try
             {
-                using var reader = new StreamReader(request.InputStream, request.ContentEncoding);
-                var body = await reader.ReadToEndAsync().ConfigureAwait(false);
+                var body = await ReadBoundedBodyAsync(request).ConfigureAwait(false) ?? throw new ArgumentException("Request body too large.");
                 var prefs = JsonSerializer.Deserialize<UserReportPrefs>(body, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                 if (prefs != null)
                 {
@@ -827,7 +843,7 @@ namespace Sentinel.Agent
             }
             catch (Exception ex)
             {
-                await WriteJson(response, new { ok = false, error = ex.Message }).ConfigureAwait(false);
+                _logger.LogDebug(ex, "[WebDashboard] Request failed"); await WriteJson(response, new { ok = false, error = "operation_failed" }).ConfigureAwait(false);
             }
         }
 
@@ -860,7 +876,7 @@ namespace Sentinel.Agent
             }
             catch (Exception ex)
             {
-                await WriteJson(response, new { ok = false, error = ex.Message }).ConfigureAwait(false);
+                _logger.LogDebug(ex, "[WebDashboard] Request failed"); await WriteJson(response, new { ok = false, error = "operation_failed" }).ConfigureAwait(false);
             }
         }
 
@@ -929,7 +945,7 @@ namespace Sentinel.Agent
             }
             catch (Exception ex)
             {
-                await WriteJson(response, new { ok = false, error = ex.Message }).ConfigureAwait(false);
+                _logger.LogDebug(ex, "[WebDashboard] Request failed"); await WriteJson(response, new { ok = false, error = "operation_failed" }).ConfigureAwait(false);
             }
         }
 
@@ -1064,11 +1080,44 @@ namespace Sentinel.Agent
             response.Headers.Add("X-Content-Type-Options", "nosniff");
             response.Headers.Add("X-Frame-Options", "DENY");
             response.Headers.Add("Cache-Control", "no-store");
-            var html = DashboardHtml.GetHtml(_bearerToken);
+            response.Headers.Add("Referrer-Policy", "no-referrer");
+            response.Headers.Add("Content-Security-Policy", DashboardRequestGuard.ContentSecurityPolicy);
+            var html = DashboardHtml.GetHtml();
             var buffer = Encoding.UTF8.GetBytes(html);
             response.ContentLength64 = buffer.Length;
             await response.OutputStream.WriteAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
             response.Close();
+        }
+
+        /// <summary>
+        /// Secret-free page for a bare GET /. It re-enters with the per-tab sessionStorage token
+        /// (set earlier by the tray launch) or tells the user to reopen from the tray icon.
+        /// </summary>
+        private async Task ServeBootstrap(HttpListenerResponse response)
+        {
+            response.ContentType = "text/html; charset=utf-8";
+            response.Headers.Add("X-Content-Type-Options", "nosniff");
+            response.Headers.Add("X-Frame-Options", "DENY");
+            response.Headers.Add("Cache-Control", "no-store");
+            response.Headers.Add("Referrer-Policy", "no-referrer");
+            response.Headers.Add("Content-Security-Policy", DashboardRequestGuard.ContentSecurityPolicy);
+            var buffer = Encoding.UTF8.GetBytes(DashboardRequestGuard.BootstrapHtml);
+            response.ContentLength64 = buffer.Length;
+            await response.OutputStream.WriteAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+            response.Close();
+        }
+
+        /// <summary>Reads a request body with a hard size cap. Returns null when over the cap.</summary>
+        private static async Task<string?> ReadBoundedBodyAsync(HttpListenerRequest request, int maxChars = 16384)
+        {
+            if (request.ContentLength64 > maxChars * 4L) return null;
+            using var reader = new StreamReader(request.InputStream, Encoding.UTF8);
+            var buffer = new char[maxChars + 1];
+            int total = 0, read;
+            while (total < buffer.Length &&
+                   (read = await reader.ReadAsync(buffer, total, buffer.Length - total).ConfigureAwait(false)) > 0)
+                total += read;
+            return total > maxChars ? null : new string(buffer, 0, total);
         }
 
         private async Task ServeIcon(HttpListenerResponse response)

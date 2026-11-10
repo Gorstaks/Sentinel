@@ -1,5 +1,64 @@
 # Changelog
 
+## [3.7.1] - 2026-11-10
+Red/blue audit remediation. A source-aware review looked for paths where an attacker-controlled signal could steer SYSTEM, where a local user could reach a secret, and where trust was keyed on a name. This release closes them. See `docs/THREAT_MODEL.md` ("Red/blue audit remediation (3.7.1)") for residual limits.
+### Security - local attack surface
+- **Dashboard token no longer disclosed to any local caller.** `GET /` used to embed the bearer token in the page (`EMBEDDED_TOKEN`), so `curl http://localhost:19845/` from any local process gave full API access. The full page is now served only to a request carrying the launch token. Everyone else gets a secret-free bootstrap page that re-enters from the tab's `sessionStorage`.
+  - New `DashboardRequestGuard` pins `Host` to the loopback dashboard (DNS-rebinding defense) and rejects a foreign `Origin`.
+  - Pages send a CSP and `Referrer-Policy: no-referrer`.
+  - `/api/*` now accepts the token only in the `Authorization` header; the query token is limited to `GET /` and the WebSocket upgrade.
+  - Request bodies are capped at 16 Ki characters (DNS approval at 4 Ki).
+  - API errors return `operation_failed` instead of exception text.
+- **IPC key and pipe.**
+  - `ProgramDataGuard` re-owns `%ProgramData%\Sentinel` and `Secure`, rewrites a protected DACL and verifies it, failing loudly instead of swallowing ACL errors.
+  - An existing `.ipc_token` is reused only if it is SYSTEM/Administrators-owned and no one else can write it; a planted key is regenerated, and the client also refuses an untrusted key file.
+  - The service claims the pipe name with `FILE_FLAG_FIRST_PIPE_INSTANCE` and keeps a standing instance between clients.
+  - The client (`PipeServerIdentity`) sends a signed request only to a session-0 server whose image is the installed `Sentinel.Service.exe`.
+- **Install directory.**
+  - The SYSTEM service runs every DLL in its folder, so `InstallDirectoryPolicy` now refuses `--install` and service start from a directory that is not admin-only (owner, write ACEs and reparse points are checked).
+  - Setup hides the directory page, installs only under Program Files, and no longer runs the recursive `icacls` reset on any other path.
+  - Service and watchdog image paths are always quoted.
+### Security - response cannot be steered
+- **SUBST no longer authorizes kills.** Any standard user can create a SUBST drive. `VolumeMountMonitor` used to kill the apparent creator and its parent, and, when the drive was recreated, every process started in the last 30 s outside Windows/Program Files. It also deleted Run values, scheduled tasks (with a string-built `schtasks` command) and WMI subscriptions on substring matches. The drive is still dismounted. Creator and persistence candidates are now Tier2 / LogOnly reports.
+- **Ancestor kills resist parent-PID spoofing.** `ChainTracer.IsAncestorKillRefused` preserves an ancestor with unresolved identity, a valid signature, an image under Windows/Program Files (default-writable folders such as `Windows\Temp` excepted), or a known security/VPN product name. The detected process itself is still contained.
+- **Kill protection fixes.**
+  - `HardeningModule` critical-name checks are now case-insensitive, and the system-directory check uses `OrdinalIgnoreCase`.
+  - More OS service hosts are protected (`spoolsv`, `TrustedInstaller`, `WmiPrvSE`, `audiodg` and others).
+  - Common third-party security, VPN and password-manager processes under Program Files are never kill targets.
+- **Registry removal is allowlisted.** `RemoveRegistryEntry` used to delete whatever hive/key the metadata named. `RegistryRemovalPolicy` now limits it to:
+  - Run/RunOnce and browser extension-forcelist values;
+  - unprotected Win32 service subkeys pointing at a user-writable image;
+  - exact `CLSID\{guid}\InprocServer32` entries pointing at a user-writable DLL.
+
+  The live value must still match the observation. Refusals are recorded.
+- **File mutation refuses links.**
+  - `QuarantineFileAtomicAsync` refuses a reparse point anywhere in the path or a file with more than one hard link.
+  - The `takeown`/`icacls` fallback (string-interpolated, link-following as SYSTEM) is removed.
+  - Vault ACL failures are logged, not swallowed.
+  - ISO containment moves a plain `.iso`/`.img` into the vault instead of deleting it.
+  - `LnkShortcutMonitor` awaits quarantine and dropped its path-delete fallback.
+- **Cast firewall blocks** share the MitM posture gate, never target the gateway, DNS/DHCP servers, multicast or link-local addresses, and call `netsh` by absolute path.
+- **LGPO.exe** runs only with a valid Microsoft Corporation signature.
+### Security - trust no longer keyed on names
+- Attack-root aggregation stops at an `ExcludedAncestryRoots` name (svchost, explorer, ...) only when the image really is a Windows system binary, so a loader named `svchost.exe` in AppData no longer splits its own chain.
+- Installer and DirectX/redist demotion now needs an anchor: the real `System32`/`SysWOW64` (previously any path containing `\System32\` qualified), a Program Files image, or a valid signature.
+- "Microsoft-signed" (`MicrosoftPublisher`) means an exact known Microsoft common name. The substring checks in `SignerTrustService`, `DllUnloadEngine`, `ProcessModuleAuditor`, `WinsockLspIntegrityMonitor` and `WindowsServicingTrust` are replaced.
+- The signature cache is keyed on size, both timestamps and a head/tail content hash, so resetting a replaced file's mtime no longer reuses a "signed" verdict.
+### Detection - self-protection blind spots
+- ETW session enumeration used `LoggerNameOffset` at byte 120 (past the 120-byte x64 struct), so session names were likely never read and "critical session stopped" could not fire. `EtwTraceLayout` uses the native offsets.
+- New Tier2 / LogOnly observations:
+  - `Anti-Tamper: NtTraceEvent Modified in Critical Process`
+  - `Anti-Tamper: Sentinel Companion Binary Changed` (every `Sentinel*` binary next to the service is hashed at start)
+  - `Anti-Tamper: Service ImagePath Changed`
+### CI and release
+- Third-party GitHub Actions are pinned to commit SHAs.
+- Inno Setup is pinned to 6.7.1 and `ISCC.exe` must have a valid signature.
+- Release signing is required whenever a signing secret is configured. An unsigned installer is called out in the release notes.
+- A manual `workflow_dispatch` publish is accepted only from main/master.
+### Tests
+- New `V371AuditRemediationTests` (dashboard guard, install/ACL policy, registry allowlist, ancestor refusal, anchored noise, exact Microsoft signer, fingerprint, hard-link refusal, cast address guard, ETW layout and patch comparison, service ImagePath match, Tier2/LogOnly contract for every new observation).
+- `AdvancedResponseEngineTests` now covers refusal of an off-allowlist key and of a value that changed since it was observed. Removal is exercised on a real HKCU Run fixture value.
+
 ## [3.7.0] - 2026-11-09
 
 ### Removed

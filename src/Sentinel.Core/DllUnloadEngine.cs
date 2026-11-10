@@ -683,8 +683,7 @@ namespace Sentinel.Core
             if (string.IsNullOrEmpty(path)) return false;
             if (!_signerTrust.IsSignedFile(path)) return false;
             var signer = _signerTrust.GetSignerName(path) ?? "";
-            return signer.IndexOf("Microsoft", StringComparison.OrdinalIgnoreCase) >= 0
-                   || signer.IndexOf("Windows", StringComparison.OrdinalIgnoreCase) >= 0;
+            return MicrosoftPublisher.IsMicrosoftCommonName(signer);
         }
 
         private List<int> FindProcessIdsFromDirectory(string directory)

@@ -111,6 +111,7 @@ namespace Sentinel.Core
                     await Task.Delay(30000, ct);
                     await CheckEtwSessionIntegrityAsync(ct);
                     await CheckProcessEtwPatchingAsync(ct);
+                    await CheckNtTraceEventPatchingAsync(ct);
                     await CheckEtwManipulationProcessesAsync(ct);
                 }
                 catch (OperationCanceledException) { break; }
@@ -231,6 +232,71 @@ namespace Sentinel.Core
             }
         }
 
+        /// <summary>
+        /// 3.7.1: ntdll!NtTraceEvent is the user-mode gateway that EtwEventWrite ends in, so patching
+        /// it blinds the same consumers without touching the EtwEventWrite prologue. Another security
+        /// product may legitimately hook ntdll, so this is Tier2 / LogOnly context, never kill authority.
+        /// </summary>
+        private async Task CheckNtTraceEventPatchingAsync(CancellationToken ct)
+        {
+            IntPtr ntdll = GetModuleHandleW("ntdll.dll");
+            if (ntdll == IntPtr.Zero) return;
+            IntPtr address = PeExportResolver.GetExportAddress(ntdll, "NtTraceEvent");
+            if (address == IntPtr.Zero) return;
+
+            byte[] ours = new byte[8];
+            if (!NativeProcessMemory.CopyRemote(Process.GetCurrentProcess().Handle, address, ours, out _)) return;
+
+            foreach (int pid in GetCriticalEtwProcesses())
+            {
+                if (ct.IsCancellationRequested) break;
+                string alertKey = $"nttrace:{pid}";
+                if (_alertedItems.Contains(alertKey)) continue;
+                if (!NativeProcessMemory.CanInspect(pid)) continue;
+
+                uint access = NativeProcessMemory.PROCESS_VM_READ | NativeProcessMemory.PROCESS_QUERY_LIMITED_INFORMATION;
+                IntPtr h = NativeProcessMemory.OpenRemoteHandle(access, pid);
+                if (h == IntPtr.Zero) continue;
+                try
+                {
+                    byte[] remote = new byte[8];
+                    if (!NativeProcessMemory.CopyRemote(h, address, remote, out int read) || read < 4) continue;
+                    if (!LooksPatched(ours, remote, read)) continue;
+
+                    string processName = "unknown";
+                    try { using var p = Process.GetProcessById(pid); processName = p.ProcessName; } catch (ArgumentException) { }
+
+                    await _detectionEngine.EmitAsync(new DetectionEvent
+                    {
+                        RuleName = "Anti-Tamper: NtTraceEvent Modified in Critical Process",
+                        Evidence = $"ntdll!NtTraceEvent differs from the reference stub in '{processName}' (PID {pid}). " +
+                                   $"Bytes: [{string.Join(" ", remote.Take(4).Select(b => b.ToString("X2")))}]",
+                        Reasoning = "A modified NtTraceEvent prologue can blind ETW consumers (MITRE T1562.006). Another security product " +
+                                    "that hooks ntdll produces the same pattern, so this is review context and never authorizes a kill.",
+                        Confidence = 0.50,
+                        Tier = DetectionTier.Tier2Indicator,
+                        AuthorizedResponse = ResponseAction.LogOnly,
+                        SignalType = SignalType.AntiTamper,
+                        ProcessName = processName,
+                        ProcessId = pid,
+                    });
+                    _alertedItems.Add(alertKey);
+                }
+                finally { NativeProcessMemory.CloseHandle(h); }
+            }
+        }
+
+        /// <summary>Pure prologue comparison: a ret/nop/jmp opener, or 3+ bytes differing from the reference.</summary>
+        internal static bool LooksPatched(byte[] reference, byte[] remote, int read)
+        {
+            if (read < 4 || remote.Length < 4) return false;
+            if (Array.IndexOf(new byte[] { 0xC3, 0x90, 0xEB, 0xE9 }, remote[0]) >= 0) return true;
+            int diff = 0;
+            for (int i = 0; i < Math.Min(Math.Min(read, reference.Length), remote.Length); i++)
+                if (remote[i] != reference[i]) diff++;
+            return diff >= 3;
+        }
+
         private List<int> GetCriticalEtwProcesses()
         {
             var pids = new List<int>();
@@ -343,16 +409,15 @@ namespace Sentinel.Core
                 // Use QueryAllTraces to enumerate active sessions
                 // Allocate array for up to 64 sessions
                 const int maxSessions = 64;
-                const int propertiesSize = 1024; // EVENT_TRACE_PROPERTIES size estimate
+                // 3.7.1: real EVENT_TRACE_PROPERTIES layout (the old code wrote LoggerNameOffset at byte 120,
+                // past the struct, so session names were never read). Names live after the struct.
+                int propertiesSize = EtwTraceLayout.BufferSize;
 
                 var propertyPtrs = new IntPtr[maxSessions];
                 for (int i = 0; i < maxSessions; i++)
                 {
                     propertyPtrs[i] = Marshal.AllocHGlobal(propertiesSize);
-                    Marshal.WriteInt32(propertyPtrs[i], propertiesSize); // Wnode.BufferSize
-                    Marshal.WriteInt32(propertyPtrs[i], 4, 0); // Clear remaining
-                    // LoggerNameOffset at offset 120 (approximate)
-                    Marshal.WriteInt32(propertyPtrs[i], 120, 200);
+                    EtwTraceLayout.Initialize(propertyPtrs[i]);
                 }
 
                 try
@@ -364,9 +429,9 @@ namespace Sentinel.Core
                         {
                             try
                             {
-                                // Read logger name from offset
-                                int nameOffset = Marshal.ReadInt32(propertyPtrs[i], 120);
-                                if (nameOffset > 0 && nameOffset < propertiesSize - 2)
+                                // Read logger name from the offset the API reports
+                                int nameOffset = Marshal.ReadInt32(propertyPtrs[i], EtwTraceLayout.LoggerNameOffsetField);
+                                if (nameOffset >= EtwTraceLayout.StructSize && nameOffset < propertiesSize - 2)
                                 {
                                     string? name = Marshal.PtrToStringUni(propertyPtrs[i] + nameOffset);
                                     if (!string.IsNullOrEmpty(name))

@@ -1,5 +1,21 @@
 # Sentinel - Threat Model
 
+## Red/blue audit remediation (3.7.1)
+
+A source-aware red/blue review found paths where an attacker-controlled signal could steer SYSTEM, or where a local user could reach a secret. Closed in 3.7.1:
+
+- **Dashboard token disclosure.** Any local process could `GET http://localhost:19845/` and read the bearer token from the page. The token is no longer embedded. A request without the token gets a secret-free bootstrap page. `Host` and `Origin` are pinned against DNS rebinding, a CSP is sent, bodies are capped, and exception text is not returned. Residual: the token is still in the tray launch URL (stripped from the address bar after load), and a same-user process that can read the Agent's memory or the WebView profile can still obtain it.
+- **SUBST as a kill trigger.** Any user can create a SUBST drive. Sentinel used to kill the creator, its parent, and every process started in the last 30 seconds outside Windows/Program Files. It also deleted Run values and scheduled tasks on substring matches. Now it only dismounts the drive and emits Tier2 reports.
+- **Parent-PID steering.** Parent PIDs are attacker-selectable. Ancestor kills now refuse signed images, images under Windows/Program Files, unresolved identities, and known security/VPN products. Residual: an unsigned user-writable ancestor is still contained, which is the intended behavior for loaders.
+- **Registry deletion from metadata.** The executor now deletes only allowlisted persistence shapes, bound to the observed value.
+- **Link-following file mutation.** Path-based quarantine refuses reparse points and hard links. The `takeown`/`icacls` fallback is removed. ISO images are vaulted, not deleted. Residual: a check-then-act race on a plain path remains possible where the parent directory is user-writable. `ContainKnownHashAsync` is the pinned-handle reference design.
+- **Writable install directory.** The service and setup refuse a non-Program Files or non-admin-writable install directory, because LocalSystem loads every DLL there.
+- **Planted IPC key and pipe squatting.** The data and `Secure` directories are re-owned and verified. An untrusted key file is regenerated. The pipe uses a first-instance claim and the client verifies the server is the session-0 installed service. Residual: the HMAC key remains readable by interactive sessions by design; privileged operations stay gated on an elevated administrator token.
+- **Name-keyed trust.** Ancestry-root names, installer/redist names and "Microsoft" substrings no longer grant demotion or trust without a trusted-root location, the real system directory, or an exact Microsoft signer identity.
+- **Blind spots.** ETW session enumeration used a wrong struct offset and likely never read session names. It now uses the native layout. `NtTraceEvent` modification, companion-binary replacement and a rewritten service `ImagePath` are now reported (Tier2 / LogOnly).
+
+Still not addressed (documented limits): process ghosting/herpaderping, direct/indirect syscalls and unhooking, reflective .NET loading, Kerberoasting, kernel attackers, and evasion that stays below the published Tier1 confidence floor or spreads activity across short-lived PIDs.
+
 ## Pending automatic exploit maintenance
 
 ExploitShield is a separate online SYSTEM task. Internet metadata is untrusted
@@ -406,7 +422,7 @@ See [design.md](design.md) for the full component inventory (all MonitorGroups +
 - **DecoyPipeMonitor** (v2.2.0) - C2 honeypot named pipes (default CobaltStrike/Metasploit names)
 - **KernelModuleAuditMonitor** (v2.2.0) - NtQuerySystemInformation stealth driver detection; logs pre-existing BYOVD-capable modules
 - **TokenPrivilegeAuditMonitor** (v2.2.0) - Dangerous token privilege enumeration
-- **WebDashboardService** (v2.2.0) - Bearer from tray `?token=` only; Referer is not auth; `/ws/events` requires the token
+- **WebDashboardService** (v2.2.0, hardened 3.7.1) - Bearer header for `/api/*`; tray `?token=` only for `GET /` and `/ws/events`; Referer is not auth; token never embedded in HTML; `Host`/`Origin` pinned; CSP
 
 ### Group 1: Critical (Self-Protection)
 | Monitor | Purpose |

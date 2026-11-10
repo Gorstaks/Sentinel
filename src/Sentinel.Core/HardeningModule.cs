@@ -657,33 +657,59 @@ namespace Sentinel.Core
                 string.IsNullOrEmpty(imagePath)) return false;
             if (SelfPathGuard.IsSentinelSelfBinary(imagePath)) return false;
             if (AlwaysOnPolicies.IsProtectedGamePath(imagePath)) return false;
+            // 3.7.1: well-known third-party security/VPN/credential products are never a kill target
+            // when they run from a non-user-writable Program Files path. Parent PIDs are attacker
+            // selectable, so an ancestry kill must not be steerable at them.
+            if (IsThirdPartySecurityProductName(name) && IsUnderProgramFiles(imagePath!)) return false;
             return !IsCriticalProcessName(name) || !IsInSystemDirectory(imagePath!);
         }
 
-        private static bool IsCriticalProcessName(string name)
+        // 3.7.1: case-insensitive. The previous ordinal case-sensitive comparison let a differently
+        // cased name or image path skip protection.
+        private static readonly HashSet<string> CriticalProcessNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            return string.Equals(name, "csrss") ||
-                   string.Equals(name, "wininit") ||
-                   string.Equals(name, "services") ||
-                   string.Equals(name, "smss") ||
-                   string.Equals(name, "lsass") ||
-                   string.Equals(name, "winlogon") ||
-                   string.Equals(name, "dwm") ||
-                   string.Equals(name, "explorer") ||
-                   string.Equals(name, "System") ||
-                   // v1.4.0: svchost hosts hundreds of critical Windows services - killing it can
-                   // BSOD or leave the system in an unrecoverable state. Protect all instances
-                   // that reside in System32 (the path check below verifies legitimacy).
-                   string.Equals(name, "svchost") ||
-                   // v1.6.0: Core security products - path verified below (system or Program Files)
-                   string.Equals(name, "MsMpEng") ||
-                   string.Equals(name, "NisSrv") ||
-                   string.Equals(name, "SecurityHealthService") ||
-                   string.Equals(name, "Sense") ||
-                   string.Equals(name, "MpDefenderCoreService") ||
-                   string.Equals(name, "smartscreen") ||
-                   string.Equals(name, "SgrmBroker");
+            "csrss", "wininit", "services", "smss", "lsass", "winlogon", "dwm", "explorer", "System",
+            // svchost hosts hundreds of critical Windows services (path verified separately).
+            "svchost",
+            // Core security products - path verified (system or Program Files).
+            "MsMpEng", "NisSrv", "SecurityHealthService", "Sense", "MpDefenderCoreService", "smartscreen", "SgrmBroker",
+            // Other OS service hosts a spoofed parent could point at.
+            "spoolsv", "TrustedInstaller", "WmiPrvSE", "audiodg", "fontdrvhost", "lsm", "sihost", "taskhostw",
+        };
+
+        private static readonly HashSet<string> ThirdPartySecurityProductNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "GVPN", "openvpn", "wireguard", "tailscaled", "tailscale-ipn", "mullvad-daemon", "NordVPN", "nordvpn-service", "ProtonVPN",
+            "bdagent", "bdservicehost", "avp", "AvastSvc", "AVGSvc", "mbamservice", "mbam", "ekrn", "egui",
+            "CSFalconService", "CSFalconContainer", "SentinelAgent", "SentinelServiceHost", "CylanceSvc",
+            "SAVService", "ccSvcHst", "MsSense", "1Password", "Bitwarden", "KeePass", "veeam.backup.service",
+        };
+
+        internal static bool IsThirdPartySecurityProductName(string? name)
+            => !string.IsNullOrEmpty(name) && ThirdPartySecurityProductNames.Contains(name!);
+
+        private static bool IsUnderProgramFiles(string imagePath)
+        {
+            try
+            {
+                var normalized = Path.GetFullPath(imagePath);
+                foreach (var root in new[]
+                {
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                })
+                {
+                    if (string.IsNullOrEmpty(root)) continue;
+                    var prefix = root.TrimEnd('\\') + '\\';
+                    if (normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+            }
+            catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("[HardeningModule] Program Files path check failed: " + ex.Message); }
+            return false;
         }
+
+        private static bool IsCriticalProcessName(string name)
+            => !string.IsNullOrEmpty(name) && CriticalProcessNames.Contains(name);
 
         private static bool IsInSystemDirectory(string imagePath)
         {
@@ -693,7 +719,7 @@ namespace Sentinel.Core
                 var normalized = Path.GetFullPath(imagePath);
                 var winDir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
                 var winDirTrailing = winDir.EndsWith("\\") ? winDir : winDir + '\\';
-                if (normalized.StartsWith(winDirTrailing))
+                if (normalized.StartsWith(winDirTrailing, StringComparison.OrdinalIgnoreCase))
                     return true;
 
                 // v1.6.0: Also treat Program Files\Windows Defender* as protected paths
@@ -704,8 +730,8 @@ namespace Sentinel.Core
                     if (string.IsNullOrEmpty(root)) continue;
                     var defender = Path.Combine(root, "Windows Defender") + Path.DirectorySeparatorChar;
                     var defenderAdv = Path.Combine(root, "Windows Defender Advanced Threat Protection") + Path.DirectorySeparatorChar;
-                    if (normalized.StartsWith(defender) ||
-                        normalized.StartsWith(defenderAdv))
+                    if (normalized.StartsWith(defender, StringComparison.OrdinalIgnoreCase) ||
+                        normalized.StartsWith(defenderAdv, StringComparison.OrdinalIgnoreCase))
                         return true;
                 }
             }
@@ -752,9 +778,10 @@ namespace Sentinel.Core
                     ExcludeUninstallerFromDeny(file);
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Non-fatal
+                // Non-fatal to startup, but never silent (3.7.1): an unhardened install directory is a finding.
+                System.Diagnostics.Trace.TraceError("[HardeningModule] Install directory ACL hardening failed: " + ex.Message);
             }
         }
 
@@ -1155,6 +1182,16 @@ namespace Sentinel.Core
 
                 if (!File.Exists(lgpoPath) || !File.Exists(infPath))
                     return;
+
+                // 3.7.1: LGPO.exe is a third-party helper that is not built from this repo and is
+                // run as SYSTEM. Run it only when it carries a valid Microsoft Authenticode signature.
+                var lgpoPublisher = SecurityValidation.VerifyAuthenticodeSignature(lgpoPath)
+                    ? SecurityValidation.TryGetAuthenticodePublisher(lgpoPath) : null;
+                if (!string.Equals(lgpoPublisher, "Microsoft Corporation", StringComparison.OrdinalIgnoreCase))
+                {
+                    System.Diagnostics.Trace.TraceWarning("[HardeningModule] LGPO.exe skipped: not signed by Microsoft Corporation.");
+                    return;
+                }
 
                 var psi = new ProcessStartInfo(lgpoPath, $"/s \"{infPath}\"")
                 {

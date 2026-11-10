@@ -921,53 +921,86 @@ namespace Sentinel.Core
 
                 try
                 {
+                    // 3.7.1: every branch is gated by RegistryRemovalPolicy (exact roots, observed-target
+                    // binding, user-writable target). Anything else is refused and recorded as such.
                     if (!string.IsNullOrEmpty(valueName) && !string.IsNullOrEmpty(keyPath))
                     {
-                        // Remove a specific value from a key
-                        var regHive = hive switch
+                        if (!RegistryRemovalPolicy.ValueRemovalAllowed(hive, keyPath, valueName, out var valueRefusal))
                         {
-                            "HKCU" => Microsoft.Win32.Registry.CurrentUser,
-                            "HKCR" => Microsoft.Win32.Registry.ClassesRoot,
-                            "HKLM" => Microsoft.Win32.Registry.LocalMachine,
-                            _ => throw new ArgumentException("Unsupported registry hive.")
-                        };
-                        using var key = regHive.OpenSubKey(keyPath, writable: true);
-                        if (key != null)
+                            removalLog = "Refused registry value removal: " + valueRefusal;
+                        }
+                        else
                         {
-                            key.DeleteValue(valueName, throwOnMissingValue: false);
-                            removed = !key.GetValueNames().Contains(valueName, StringComparer.OrdinalIgnoreCase);
-                            removalLog = $"Verified absent value '{valueName}' from {hive}\\{keyPath}";
+                            var regHive = string.Equals(hive, "HKCU", StringComparison.OrdinalIgnoreCase)
+                                ? Microsoft.Win32.Registry.CurrentUser : Microsoft.Win32.Registry.LocalMachine;
+                            using var key = regHive.OpenSubKey(keyPath, writable: true);
+                            if (key != null)
+                            {
+                                var observed = detection.Metadata!.GetValueOrDefault("ValueData", detection.Metadata!.GetValueOrDefault("ExtensionConfig", ""));
+                                var live = key.GetValue(valueName)?.ToString() ?? "";
+                                if (!string.IsNullOrEmpty(observed) && !string.Equals(observed, live, StringComparison.Ordinal))
+                                {
+                                    removalLog = "Refused registry value removal: value changed since it was observed";
+                                }
+                                else
+                                {
+                                    key.DeleteValue(valueName, throwOnMissingValue: false);
+                                    removed = !key.GetValueNames().Contains(valueName, StringComparer.OrdinalIgnoreCase);
+                                    removalLog = $"Verified absent value '{valueName}' from {hive}\\{keyPath}";
+                                }
+                            }
                         }
                     }
-                    else if (!string.IsNullOrEmpty(subKey) && keyPath.Contains("Services"))
+                    else if (!string.IsNullOrEmpty(subKey) && keyPath.IndexOf("Services", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         // Remove a service subkey
-                        using var servicesKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(keyPath, writable: true);
+                        using var servicesKey = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(RegistryRemovalPolicy.ServicesRoot, writable: true);
                         if (servicesKey != null)
                         {
-                            servicesKey.DeleteSubKeyTree(subKey, throwOnMissingSubKey: false);
-                            using var remaining = servicesKey.OpenSubKey(subKey);
-                            removed = remaining == null;
-                            removalLog = $"Verified absent service subkey '{subKey}' from {hive}\\{keyPath}";
+                            string? liveImage = null; int? liveType = null;
+                            using (var serviceKey = servicesKey.OpenSubKey(subKey))
+                            {
+                                liveImage = serviceKey?.GetValue("ImagePath")?.ToString();
+                                if (serviceKey?.GetValue("Type") is int typeValue) liveType = typeValue;
+                            }
+                            if (!RegistryRemovalPolicy.ServiceRemovalAllowed(keyPath, subKey, liveImage, liveType,
+                                    detection.Metadata!.GetValueOrDefault("ImagePath", ""), out var serviceRefusal))
+                            {
+                                removalLog = "Refused service removal: " + serviceRefusal;
+                            }
+                            else
+                            {
+                                servicesKey.DeleteSubKeyTree(subKey, throwOnMissingSubKey: false);
+                                using var remaining = servicesKey.OpenSubKey(subKey);
+                                removed = remaining == null;
+                                removalLog = $"Verified absent service subkey '{subKey}' from {hive}\\{keyPath}";
+                            }
                         }
                     }
-                    else if (!string.IsNullOrEmpty(keyPath) && keyPath.Contains("CLSID"))
+                    else if (!string.IsNullOrEmpty(keyPath) && keyPath.IndexOf("CLSID", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
                         // Remove a CLSID subkey tree
-                        using var clsidKey = Microsoft.Win32.Registry.ClassesRoot.OpenSubKey(keyPath, writable: true);
-                        if (clsidKey != null)
+                        var clsid = detection.Metadata!.GetValueOrDefault("CLSID", "");
+                        string? liveServer = null;
+                        if (!string.IsNullOrEmpty(clsid))
+                        {
+                            using var serverKey = Microsoft.Win32.Registry.ClassesRoot.OpenSubKey(keyPath);
+                            liveServer = serverKey?.GetValue(null)?.ToString();
+                        }
+                        if (!RegistryRemovalPolicy.ClsidRemovalAllowed(keyPath, clsid, liveServer,
+                                detection.Metadata!.GetValueOrDefault("DllPath", ""), out var clsidRefusal))
+                        {
+                            removalLog = "Refused CLSID removal: " + clsidRefusal;
+                        }
+                        else
                         {
                             using var parent = Microsoft.Win32.Registry.ClassesRoot.OpenSubKey("CLSID", writable: true);
                             if (parent != null)
                             {
-                                var clsid = detection.Metadata!.GetValueOrDefault("CLSID", "");
-                                if (!string.IsNullOrEmpty(clsid))
-                                {
-                                    parent.DeleteSubKeyTree(clsid, throwOnMissingSubKey: false);
-                                    using var remaining = parent.OpenSubKey(clsid);
-                                    removed = remaining == null;
-                                    removalLog = $"Verified absent CLSID '{clsid}' from HKCR\\CLSID";
-                                }
+                                parent.DeleteSubKeyTree(clsid, throwOnMissingSubKey: false);
+                                using var remaining = parent.OpenSubKey(clsid);
+                                removed = remaining == null;
+                                removalLog = $"Verified absent CLSID '{clsid}' from HKCR\\CLSID";
                             }
                         }
                     }

@@ -252,6 +252,18 @@ namespace Sentinel.Core
                             continue;
                         }
 
+                        // 3.7.1: a parent PID is attacker-selectable (PROC_THREAD_ATTRIBUTE_PARENT_PROCESS), so
+                        // "ancestor" is not proof of involvement. Only the detected process and ancestors that
+                        // are unsigned and run from a user-writable location are containment targets.
+                        if (IsAncestorKillRefused(node.ProcessId, detection.ProcessId, node.ProcessName, node.ImagePath,
+                                p => SecurityValidation.VerifyAuthenticodeSignature(p), out var refusalReason))
+                        {
+                            _logger.LogInformation(
+                                "[ChainTracer] Preserving ancestor PID {Pid} ({Name}): {Reason}",
+                                node.ProcessId, node.ProcessName, refusalReason);
+                            continue;
+                        }
+
                         try
                         {
                             var containment = HardeningModule.SafeKillProcessTree(node.ProcessId);
@@ -456,6 +468,52 @@ namespace Sentinel.Core
                 DurationMs = (result.EndTime - result.StartTime).TotalMilliseconds
             };
             await _eventLogger.LogEventAsync("chain_trace", evidence);
+        }
+
+        /// <summary>
+        /// Policy for killing an ancestor (never the detected process itself). Refuses when the
+        /// identity is unresolved, the image is a known security/VPN product, it runs from Windows or
+        /// Program Files, or it carries a valid Authenticode signature. Refusing is always the safe side.
+        /// </summary>
+        internal static bool IsAncestorKillRefused(
+            int nodePid, int detectionPid, string? name, string? imagePath,
+            Func<string, bool> isSigned, out string reason)
+        {
+            reason = string.Empty;
+            if (nodePid == detectionPid) return false;
+            if (string.IsNullOrEmpty(imagePath)) { reason = "ancestor identity unresolved"; return true; }
+            var cleanName = Sentinel.Core.StringNet48.ReplaceIgnoreCase(name ?? "", ".exe", "");
+            if (HardeningModule.IsThirdPartySecurityProductName(cleanName)) { reason = "protected security/VPN product"; return true; }
+            if (IsUnderProtectedRoot(imagePath!)) { reason = "ancestor runs from a protected install root"; return true; }
+            try
+            {
+                if (isSigned(imagePath!)) { reason = "ancestor has a valid Authenticode signature"; return true; }
+            }
+            catch (Exception ex)
+            {
+                reason = "signature check failed: " + ex.GetType().Name;
+                return true;
+            }
+            return false;
+        }
+
+        private static bool IsUnderProtectedRoot(string imagePath)
+        {
+            try
+            {
+                var full = Path.GetFullPath(imagePath);
+                if (InstallDirectoryPolicy.IsUnderProgramFiles(full)) return true;
+                var win = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+                if (string.IsNullOrEmpty(win)) return false;
+                // Windows\Temp and other default-writable folders inside the tree are drops, not a trusted root.
+                var lower = full.ToLowerInvariant();
+                if (lower.Contains(@"\windows\temp\") || lower.Contains(@"\windows\tasks\") || lower.Contains(@"\windows\tracing\") ||
+                    lower.Contains(@"\windows\debug\") || lower.Contains(@"\windows\registration\crmlog\"))
+                    return false;
+                return full.StartsWith(win.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase);
+            }
+            catch (ArgumentException) { return false; }
+            catch (NotSupportedException) { return false; }
         }
 
         internal static bool IsSystemBinary(string? imagePath, string processName)

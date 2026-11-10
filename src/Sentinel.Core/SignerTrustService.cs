@@ -26,7 +26,7 @@ namespace Sentinel.Core
         // HARDENING v1.3.0: Added lastWriteTime tracking. If the file is modified after
         // caching (e.g., attacker replaces a signed binary with malware), the stale cache
         // entry is invalidated and re-verified. Previously the cache was permanent.
-        private readonly ConcurrentDictionary<string, (bool IsSigned, string Signer, DateTime LastWrite)> _cache = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, (bool IsSigned, string Signer, string Fingerprint)> _cache = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// Confidence reduction factor for signed binaries.
@@ -71,8 +71,8 @@ namespace Sentinel.Core
                 // HARDENING v1.3.0: Invalidate cache if file was modified since caching
                 try
                 {
-                    var currentWrite = File.GetLastWriteTimeUtc(filePath);
-                    if (currentWrite != cached.LastWrite)
+                    var currentWrite = FileFingerprint(filePath);
+                    if (!string.Equals(currentWrite, cached.Fingerprint, StringComparison.Ordinal))
                     {
                         _cache.TryRemove(filePath, out _);
                         // Fall through to re-verify
@@ -86,8 +86,8 @@ namespace Sentinel.Core
             }
 
             var (isSigned, signer) = VerifyAndExtractSigner(filePath);
-            DateTime writeTime = DateTime.MinValue;
-            try { writeTime = File.GetLastWriteTimeUtc(filePath); } catch { }
+            string writeTime = "";
+            try { writeTime = FileFingerprint(filePath); } catch { }
             _cache[filePath] = (isSigned, signer, writeTime);
             return isSigned;
         }
@@ -104,8 +104,8 @@ namespace Sentinel.Core
             {
                 try
                 {
-                    var currentWrite = File.GetLastWriteTimeUtc(filePath);
-                    if (currentWrite != cached.LastWrite)
+                    var currentWrite = FileFingerprint(filePath);
+                    if (!string.Equals(currentWrite, cached.Fingerprint, StringComparison.Ordinal))
                     {
                         _cache.TryRemove(filePath, out _);
                     }
@@ -118,8 +118,8 @@ namespace Sentinel.Core
             }
 
             var (isSigned, signer) = VerifyAndExtractSigner(filePath);
-            DateTime writeTime = DateTime.MinValue;
-            try { writeTime = File.GetLastWriteTimeUtc(filePath); } catch { }
+            string writeTime = "";
+            try { writeTime = FileFingerprint(filePath); } catch { }
             _cache[filePath] = (isSigned, signer, writeTime);
             return isSigned ? signer : null;
         }
@@ -132,8 +132,8 @@ namespace Sentinel.Core
             if (string.IsNullOrEmpty(filePath)) return false;
             if (!IsSignedFile(filePath)) return false;
             var signer = GetSignerName(filePath) ?? string.Empty;
-            return signer.IndexOf("Microsoft", StringComparison.OrdinalIgnoreCase) >= 0
-                   || signer.IndexOf("Windows", StringComparison.OrdinalIgnoreCase) >= 0;
+            // 3.7.1: exact known Microsoft common names, not a substring of attacker-chosen publisher text.
+            return MicrosoftPublisher.IsMicrosoftCommonName(signer);
         }
 
         /// <summary>
@@ -236,10 +236,39 @@ namespace Sentinel.Core
             }
         }
 
+        /// <summary>
+        /// 3.7.1: cache key material. Last-write time alone is attacker-settable, so a replaced file whose
+        /// timestamp was reset kept its old "signed" verdict. Size, both timestamps and a hash of the first
+        /// and last 4 KiB (PE header and the signature/overlay area) must all still match.
+        /// </summary>
+        internal static string FileFingerprint(string filePath)
+        {
+            try
+            {
+                var info = new FileInfo(filePath);
+                if (!info.Exists) return "";
+                using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                var head = new byte[4096];
+                int headRead = stream.Read(head, 0, head.Length);
+                var tail = new byte[4096];
+                int tailRead = 0;
+                if (stream.Length > head.Length)
+                {
+                    stream.Seek(-Math.Min(tail.Length, stream.Length), SeekOrigin.End);
+                    tailRead = stream.Read(tail, 0, tail.Length);
+                }
+                using var sha = System.Security.Cryptography.SHA256.Create();
+                sha.TransformBlock(head, 0, headRead, null, 0);
+                sha.TransformFinalBlock(tail, 0, tailRead);
+                return info.Length + "|" + info.LastWriteTimeUtc.Ticks + "|" + info.CreationTimeUtc.Ticks + "|" + Convert.ToBase64String(sha.Hash!);
+            }
+            catch (IOException) { return ""; }
+            catch (UnauthorizedAccessException) { return ""; }
+        }
         public void AddTestOverride(string filePath, bool isSigned, string signer)
         {
-            DateTime writeTime = DateTime.MinValue;
-            try { writeTime = File.GetLastWriteTimeUtc(filePath); } catch { }
+            string writeTime = "";
+            try { writeTime = FileFingerprint(filePath); } catch { }
             _cache[filePath] = (isSigned, signer, writeTime);
         }
 

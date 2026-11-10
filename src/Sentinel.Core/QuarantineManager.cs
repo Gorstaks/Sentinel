@@ -127,7 +127,11 @@ namespace Sentinel.Core
 
                 dirInfo.SetAccessControl(security);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // 3.7.1: never silent. A vault whose ACL could not be applied is a finding.
+                System.Diagnostics.Trace.TraceError("[QuarantineManager] Vault ACL enforcement failed for '" + dirPath + "': " + ex.Message);
+            }
         }
 
         /// <summary>
@@ -175,6 +179,16 @@ namespace Sentinel.Core
             // Avoid quarantining known installer executables (e.g. ChromeSetup) which are legitimate.
             if (InstallerHeuristics.IsLikelyInstallerPath(filePath))
                 return null; // skip quarantine for installer-like paths
+
+            // 3.7.1: this path-based flow reads, then deletes, as SYSTEM. A junction or hard link
+            // planted by a standard user would redirect the delete (and the ACL seize below) to a
+            // different file, so such paths are refused. KnownHash containment uses a pinned handle.
+            var linkRefusal = FileObjectSafety.RefusalReason(filePath);
+            if (linkRefusal != null)
+            {
+                System.Diagnostics.Trace.TraceWarning("[QuarantineManager] Refused '" + filePath + "': " + linkRefusal);
+                return null;
+            }
 
             // Trusted-publisher allowlist (signer-based, path-independent).
             //
@@ -437,30 +451,13 @@ namespace Sentinel.Core
                 fi.SetAccessControl(sec);
                 return;
             }
-            catch { /* fall through to takeown/icacls */ }
-
-            // Fallback: shell out exactly like the PS script. Scoped to this aggressive path.
-            RunSilent("takeown.exe", $"/F \"{filePath}\" /A");
-            RunSilent("icacls.exe", $"\"{filePath}\" /reset");
-            RunSilent("icacls.exe", $"\"{filePath}\" /grant Administrators:F /inheritance:d");
-        }
-
-        private static void RunSilent(string exe, string args)
-        {
-            try
+            catch (Exception ex)
             {
-                using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = exe,
-                    Arguments = args,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                });
-                p?.WaitForExit(5000);
+                // 3.7.1: the takeown/icacls fallback was removed. It interpolated the path into a
+                // command line and followed links as SYSTEM. If the managed ACL change fails, the
+                // file is left for delete-on-reboot instead.
+                System.Diagnostics.Trace.TraceWarning("[QuarantineManager] ACL seize failed for '" + filePath + "': " + ex.Message);
             }
-            catch { /* best effort */ }
         }
 
         /// <summary>

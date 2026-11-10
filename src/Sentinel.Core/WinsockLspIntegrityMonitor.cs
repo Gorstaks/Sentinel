@@ -358,7 +358,7 @@ namespace Sentinel.Core
         internal static bool IsMicrosoftSigner(string? signer)
         {
             if (string.IsNullOrEmpty(signer)) return false;
-            return signer!.IndexOf("Microsoft", StringComparison.OrdinalIgnoreCase) >= 0;
+            return MicrosoftPublisher.IsMicrosoftCommonName(signer);
         }
     }
 }

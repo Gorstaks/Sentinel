@@ -17,13 +17,13 @@ jobs:
     timeout-minutes: 20
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
     # The .NET 10 SDK builds everything: the net48 projects (core/service/agent/tests)
     # consume 8.0-pinned NuGet packages but do NOT need the 8.0 SDK, and the MlTrainer
     # tool targets net10.0. Verified locally with only 10.0.400 installed.
     - name: Setup .NET 10
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
       with:
         dotnet-version: '10.0.x'
 
@@ -40,7 +40,7 @@ jobs:
       run: ./tests/Sentinel.Tests/LocalFirewallPolicy.Tests.ps1
 
     - name: Setup Node for Worker tests
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
         node-version: '24'
 
@@ -69,7 +69,7 @@ jobs:
 
     - name: Upload Defender validation evidence
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: defender-build-evidence
         path: TestResults/Defender/*
@@ -89,7 +89,7 @@ jobs:
 
     - name: Upload test results
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: test-results
         path: |
@@ -104,7 +104,7 @@ jobs:
 
     - name: Upload coverage report
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: coverage
         path: ${{ github.workspace }}/tests/Sentinel.Tests/TestResults/coverage.cobertura.xml
@@ -114,8 +114,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 35
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-dotnet@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+    - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
       with:
         dotnet-version: '10.0.x'
     - name: Build native Windows firewall integration fixture
@@ -133,8 +133,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-dotnet@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+    - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
       with:
         dotnet-version: '10.0.x'
     - name: Build native DNS validation fixture
@@ -144,7 +144,7 @@ jobs:
       run: ./tools/validation/WindowsDnsSmoke.ps1
     - name: Upload DNS validation results
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: dns-test-results
         path: TestResults/*.trx
@@ -154,8 +154,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-dotnet@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+    - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
       with:
         dotnet-version: '10.0.x'
     - name: Publish ExploitShield and build native task fixture
@@ -173,8 +173,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-dotnet@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+    - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
       with:
         dotnet-version: '10.0.x'
     - name: Build endpoint containment and attribution fixtures
@@ -191,7 +191,7 @@ jobs:
         }
     - name: Upload endpoint validation results
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: endpoint-native-results
         path: TestResults/*.trx

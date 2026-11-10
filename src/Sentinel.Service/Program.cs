@@ -158,6 +158,20 @@ namespace Sentinel.Service
                 e.SetObserved();
             };
 
+            // 3.7.1: running as a service means LocalSystem executes whatever is in this directory.
+            // Refuse to start from a location a non-administrator can write to.
+            if (!Environment.UserInteractive)
+            {
+                var installPolicy = InstallDirectoryPolicy.Evaluate(AppContext.BaseDirectory);
+                if (!installPolicy.Ok)
+                {
+                    AppendDiagnostic("fatal_crash.log",
+                        $"[{DateTime.UtcNow:O}] [FATAL] Refusing to start from an unprotected install directory: {installPolicy.Reason}\n");
+                    Environment.ExitCode = 3;
+                    return;
+                }
+            }
+
             // v2.5.5: Hardening is always-on - no early config read needed.
             // Self-protect Sentinel process and apply full lockdown immediately.
             AppendDiagnostic("startup_trace.log", $"[{DateTime.UtcNow:O}] Calling HardeningModule.ApplyOrFail()...\n");
@@ -293,44 +307,23 @@ namespace Sentinel.Service
 
         private static void EnsureRestrictedProgramDataDir(string dirPath)
         {
-            if (!Directory.Exists(dirPath))
-                Directory.CreateDirectory(dirPath);
-
             try
             {
-                var dirInfo = new DirectoryInfo(dirPath);
-                var security = dirInfo.GetAccessControl();
-                security.SetAccessRuleProtection(true, false);
-
-                var systemSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
-                security.AddAccessRule(new FileSystemAccessRule(
-                    systemSid,
-                    FileSystemRights.FullControl,
-                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-                    PropagationFlags.None,
-                    AccessControlType.Allow));
-
-                var adminsSid = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
-                security.AddAccessRule(new FileSystemAccessRule(
-                    adminsSid,
-                    FileSystemRights.FullControl,
-                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-                    PropagationFlags.None,
-                    AccessControlType.Allow));
-
-                // Interactive users must be able to open Data Folder / logs from the tray.
-                // UAC-filtered Admin tokens are not BUILTIN\Administrators.
-                var interactiveSid = new SecurityIdentifier(WellKnownSidType.InteractiveSid, null);
-                security.AddAccessRule(new FileSystemAccessRule(
-                    interactiveSid,
-                    FileSystemRights.ReadAndExecute,
-                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-                    PropagationFlags.None,
-                    AccessControlType.Allow));
-
-                dirInfo.SetAccessControl(security);
+                // Owner reset + protected DACL + verification. Interactive users keep read/execute
+                // so the tray can open the data folder and logs.
+                ProgramDataGuard.EnsureProtectedDirectory(dirPath, interactiveReadExecute: true);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // Never silent (3.7.1): an unprotected data root is a security finding.
+                System.Diagnostics.Trace.TraceError("[Sentinel.Service] ProgramData ACL enforcement failed for '" + dirPath + "': " + ex.Message);
+                try
+                {
+                    File.AppendAllText(Path.Combine(Path.GetTempPath(), "sentinel_acl_failure.log"),
+                        "[" + DateTime.UtcNow.ToString("O") + "] " + dirPath + ": " + ex.Message + Environment.NewLine);
+                }
+                catch (IOException) { /* diagnostic only; the Trace line above is the record */ }
+            }
         }
 
         public static IHostBuilder CreateHostBuilder(string[] args) =>

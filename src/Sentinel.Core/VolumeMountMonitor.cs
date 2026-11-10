@@ -140,8 +140,8 @@ namespace Sentinel.Core
                         {
                             await EmitFallbackDriveDetection(vol, startupClassification);
                             await DismountFallbackDrive(vol);
-                            await HuntSubstCreatorProcess(vol.DriveLetter!, skipPhase4: true);
-                            await RemoveSubstPersistence(vol.DriveLetter!);
+                            await ReportSubstCreatorCandidates(vol.DriveLetter!);
+                            await ReportSubstPersistence(vol.DriveLetter!);
                         });
                         continue; // Do NOT baseline this drive
                     }
@@ -236,7 +236,7 @@ namespace Sentinel.Core
                                 !string.IsNullOrEmpty(vol.DriveLetter))
                             {
                                 await DismountFallbackDrive(vol);
-                                await HuntSubstCreatorProcess(vol.DriveLetter!);
+                                await ReportSubstCreatorCandidates(vol.DriveLetter!);
                             }
                             continue;
                         }
@@ -249,7 +249,7 @@ namespace Sentinel.Core
                         // There is no legitimate reason for a SUBST drive to be created after
                         // boot - these are the #1 attacker fallback technique for staging
                         // payloads after their primary C2 relay is cut off.
-                        // No phantom device correlation required for SUBST - unconditional kill.
+                        // No phantom device correlation required for SUBST - unconditional dismount (no process is killed; 3.7.1).
                         if (ResponsePolicy.MayPerformInlineHostMutation(_config) &&
                             string.Equals(classification, "SUBST") &&
                             !string.IsNullOrEmpty(vol.DriveLetter))
@@ -259,20 +259,9 @@ namespace Sentinel.Core
                                 vol.DriveLetter);
                             await EmitFallbackDriveDetection(vol, classification);
                             await DismountFallbackDrive(vol);
-                            await HuntSubstCreatorProcess(vol.DriveLetter!);
-                            await RemoveSubstPersistence(vol.DriveLetter!);
+                            await ReportSubstCreatorCandidates(vol.DriveLetter!);
+                            await ReportSubstPersistence(vol.DriveLetter!);
 
-                            // v1.4.1: If the drive keeps reappearing (recreated faster than our scan),
-                            // escalate - scan ALL non-system processes using DefineDosDevice API.
-                            // This catches signed binaries from Program Files that Phase 4 skips.
-                            if (_alertedVolumes.TryGetValue(vol.DeviceId, out var prevAlert) &&
-                                DateTimeOffset.UtcNow - prevAlert < TimeSpan.FromSeconds(30))
-                            {
-                                _logger.LogWarning(
-                                    "[VolumeMountMonitor] SUBST drive {Drive} is being recreated rapidly - escalating to kill ALL DefineDosDevice callers",
-                                    vol.DriveLetter);
-                                await HuntRecentlySpawnedUnsignedProcesses(vol.DriveLetter!.TrimEnd('\\', ':').ToUpperInvariant(), new HashSet<int>());
-                            }
 
                             continue;
                         }
@@ -429,696 +418,93 @@ namespace Sentinel.Core
         }
 
         /// <summary>
-        /// Finds and kills the process that created the SUBST drive.
-        /// Multi-layered hunt:
-        /// 1. subst.exe process (obvious case)
-        /// 2. cmd.exe/powershell.exe with subst in command line
-        /// 3. Any process that has a handle open to the SUBST target path (the creator likely still has it open)
-        /// 4. Any non-system process that loaded kernel32 and was spawned recently (within 10s of detection)
-        ///    AND has a connection to an IP that PhantomDeviceMonitor blocked - this is the implant.
-        /// 5. Fallback: any process whose working directory is the SUBST target path
+        /// 3.7.1: observe-only. Reports processes that look like the SUBST creator. It never
+        /// terminates anything. Process kill authority needs a Tier1 behavioral terminal through
+        /// <see cref="AdvancedResponseEngine"/>; a SUBST mapping can be created by any standard
+        /// user, so killing "the creator", its parent, or "recently started" processes would let a
+        /// low-privilege user steer SYSTEM into terminating legitimate software.
         /// </summary>
-        private async Task HuntSubstCreatorProcess(string driveLetter, bool skipPhase4 = false)
+        private async Task ReportSubstCreatorCandidates(string driveLetter)
         {
             var normalizedLetter = driveLetter.TrimEnd('\\', ':').ToUpperInvariant();
-            var killed = new HashSet<int>();
-
+            if (!IsSingleDriveLetter(normalizedLetter)) return;
             try
             {
-                // --- Phase 1: Direct subst.exe or shell with subst command ---
                 using var searcher = new ManagementObjectSearcher(
-                    "SELECT ProcessId, Name, CommandLine, ParentProcessId FROM Win32_Process " +
+                    "SELECT ProcessId, Name, CommandLine FROM Win32_Process " +
                     "WHERE Name = 'subst.exe' OR Name = 'cmd.exe' OR Name = 'powershell.exe' OR Name = 'pwsh.exe'");
-
                 foreach (ManagementObject proc in searcher.Get())
                 {
                     var cmdLine = proc["CommandLine"]?.ToString() ?? "";
                     var pid = Convert.ToInt32(proc["ProcessId"]);
-                    var parentPid = Convert.ToInt32(proc["ParentProcessId"]);
                     var name = proc["Name"]?.ToString() ?? "";
-
-                    bool isSubstCreator = name.Equals("subst.exe") ||
-                        (cmdLine.Contains("subst") &&
-                         cmdLine.Contains(normalizedLetter));
-
-                    if (isSubstCreator && pid > 4)
+                    if (pid <= 4) continue;
+                    bool mentionsDrive = cmdLine.IndexOf("subst", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                        cmdLine.IndexOf(normalizedLetter + ":", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (!mentionsDrive) continue;
+                    await _detectionEngine.EmitAsync(new DetectionEvent
                     {
-                        await KillProcessAndParent(pid, parentPid, name, cmdLine, normalizedLetter, "SUBST command in cmdline", killed);
-                    }
-                }
-
-                // --- Phase 2: Any process connected to a PhantomDeviceMonitor-blocked IP ---
-                // This catches the implant itself - the process that receives commands from the
-                // rogue LAN device and translates them into local DefineDosDevice calls.
-                if (_phantomDeviceMonitor != null)
-                {
-                    await HuntImplantByNetworkConnection(normalizedLetter, killed);
-                }
-
-                // --- Phase 3: Processes with the SUBST target path as working directory or in cmdline ---
-                // If the SUBST was 'subst S: C:\some\path', find processes rooted there
-                var substTarget = GetSubstTarget(normalizedLetter);
-                if (!string.IsNullOrEmpty(substTarget))
-                {
-                    await HuntBySubstTarget(substTarget!, normalizedLetter, killed);
-                }
-
-                if (killed.Count == 0 && !skipPhase4)
-                {
-                    _logger.LogWarning(
-                        "[VolumeMountMonitor] Could not identify SUBST creator for {Drive}: - implant may be using direct DefineDosDevice from custom binary. Scanning all non-system processes with recent start time.",
-                        normalizedLetter);
-
-                    // --- Phase 4: Kill any non-system, non-signed process started within last 30s ---
-                    await HuntRecentlySpawnedUnsignedProcesses(normalizedLetter, killed);
-                }
-
-                if (killed.Count > 0)
-                {
-                    _logger.LogWarning("[VolumeMountMonitor] Killed {Count} process(es) related to SUBST drive {Drive}:",
-                        killed.Count, normalizedLetter);
+                        RuleName = "SUBST Drive Creator Candidate (observe-only)",
+                        Evidence = $"Process {name} (PID {pid}) has a command line naming SUBST drive {normalizedLetter}:",
+                        Reasoning = "A process command line mentions the SUBST drive that was just dismounted. " +
+                                    "A command line is attacker-controlled and any user can run subst, so this is context only and never authorizes a kill.",
+                        Confidence = 0.40,
+                        Tier = DetectionTier.Tier2Indicator,
+                        AuthorizedResponse = ResponseAction.LogOnly,
+                        ProcessName = name,
+                        ProcessId = pid
+                    }).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "[VolumeMountMonitor] HuntSubstCreatorProcess failed");
+                _logger.LogDebug(ex, "[VolumeMountMonitor] SUBST creator candidate report failed");
             }
         }
 
         /// <summary>
-        /// Kills a process and its parent (the parent is likely the implant that spawned subst.exe/cmd.exe).
+        /// 3.7.1: observe-only. Reports HKLM Run/RunOnce values that would recreate the SUBST drive.
+        /// It deletes nothing: matching on substrings of user-writable data and deleting would let
+        /// a standard user make SYSTEM remove other software's autostart entries.
         /// </summary>
-        private async Task KillProcessAndParent(int pid, int parentPid, string name, string cmdLine, string driveLetter, string reason, HashSet<int> killed)
-        {
-            // Kill the direct process
-            if (!killed.Contains(pid))
-            {
-                try
-                {
-                    var process = Process.GetProcessById(pid);
-                    process.KillTree();
-                    killed.Add(pid);
-                    _logger.LogWarning(
-                        "[VolumeMountMonitor] KILLED {Name} (PID {Pid}) - reason: {Reason}, cmdline: {Cmd}",
-                        name, pid, reason, cmdLine);
-                }
-                catch { }
-            }
-
-            // Kill the parent - this is the implant that spawned the shell/subst.exe
-            if (parentPid > 4 && !killed.Contains(parentPid))
-            {
-                try
-                {
-                    var parent = Process.GetProcessById(parentPid);
-                    var parentName = parent.ProcessName;
-
-                    // Don't kill critical system processes
-                    if (!IsProtectedProcess(parentName))
-                    {
-                        parent.KillTree();
-                        killed.Add(parentPid);
-                        _logger.LogWarning(
-                            "[VolumeMountMonitor] KILLED PARENT implant: {Name} (PID {Pid}) - spawned SUBST creator",
-                            parentName, parentPid);
-
-                        await _detectionEngine.EmitAsync(new DetectionEvent
-                        {
-                            RuleName = "Implant Killed: SUBST Drive Creator Parent Process",
-                            Evidence = $"Process {parentName} (PID {parentPid}) spawned {name} which created SUBST drive {driveLetter}:",
-                            Reasoning = "This process spawned the command that created an attacker SUBST staging drive. " +
-                                        "It is the implant receiving commands from the rogue LAN device. Process tree killed.",
-                            Confidence = 0.94,
-                            Tier = DetectionTier.Tier1Behavioral,
-                            AuthorizedResponse = ResponseAction.KillProcessTree,
-                            ProcessName = parentName,
-                            ProcessId = parentPid
-                        });
-                    }
-                }
-                catch { }
-            }
-        }
-
-        /// <summary>
-        /// Finds any non-system process with an active TCP connection to an IP that
-        /// PhantomDeviceMonitor has blocked. That's the implant.
-        /// </summary>
-        private async Task HuntImplantByNetworkConnection(string driveLetter, HashSet<int> killed)
-        {
-            try
-            {
-                var psi = new ProcessStartInfo
-                {
-                    FileName = "netstat.exe",
-                    Arguments = "-ano",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true
-                };
-                using var proc = Process.Start(psi);
-                if (proc == null) return;
-
-                var output = await proc.StandardOutput.ReadToEndAsync();
-                await proc.WaitForExitAsync();
-
-                foreach (var line in output.Split('\n'))
-                {
-                    if (!line.Contains("ESTABLISHED") &&
-                        !line.Contains("SYN_SENT"))
-                        continue;
-
-                    var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length < 5) continue;
-
-                    // Extract remote IP and PID
-                    var remoteEndpoint = parts[2];
-                    var colonIdx = remoteEndpoint.LastIndexOf(':');
-                    if (colonIdx <= 0) continue;
-                    var remoteIp = remoteEndpoint[..colonIdx];
-
-                    if (!int.TryParse(parts[4], out var pid) || pid <= 4) continue;
-                    if (killed.Contains(pid)) continue;
-
-                    // Check if this IP is blocked by PhantomDeviceMonitor
-                    if (_phantomDeviceMonitor!.IsBlockedDevice(remoteIp))
-                    {
-                        try
-                        {
-                            var process = Process.GetProcessById(pid);
-                            var processName = process.ProcessName;
-
-                            if (IsProtectedProcess(processName)) continue;
-
-                            process.KillTree();
-                            killed.Add(pid);
-
-                            _logger.LogWarning(
-                                "[VolumeMountMonitor] KILLED IMPLANT: {Name} (PID {Pid}) - connected to blocked device {Ip}",
-                                processName, pid, remoteIp);
-
-                            await _detectionEngine.EmitAsync(new DetectionEvent
-                            {
-                                RuleName = "Implant Killed: Connected to Rogue LAN Device",
-                                Evidence = $"Process {processName} (PID {pid}) has active connection to blocked device IP {remoteIp}. " +
-                                           $"This process is the implant creating SUBST drive {driveLetter}:",
-                                Reasoning = "A process maintaining a connection to a device PhantomDeviceMonitor blocked " +
-                                            "is the C2 implant receiving commands from the attacker's rogue LAN relay. " +
-                                            "The SUBST drive creation was commanded through this channel. Process tree killed.",
-                                Confidence = 0.96,
-                                Tier = DetectionTier.Tier1Behavioral,
-                                AuthorizedResponse = ResponseAction.KillProcessTree,
-                                ProcessName = processName,
-                                ProcessId = pid
-                            });
-                        }
-                        catch { }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "[VolumeMountMonitor] HuntImplantByNetworkConnection failed");
-            }
-        }
-
-        /// <summary>
-        /// Gets the SUBST target path (what the drive letter points to).
-        /// Returns null if not a SUBST drive or can't be queried.
-        /// </summary>
-        private string? GetSubstTarget(string driveLetter)
-        {
-            try
-            {
-                var buffer = new char[1024];
-                uint result = QueryDosDevice($"{driveLetter}:", buffer, (uint)buffer.Length);
-                if (result == 0) return null;
-
-                var target = new string(buffer, 0, (int)result).TrimEnd('\0');
-                if (target.StartsWith(@"\??\"))
-                    return target[4..]; // Strip \??\ prefix to get real path
-
-                return null;
-            }
-            catch { return null; }
-        }
-
-        /// <summary>
-        /// Finds processes whose executable path or command line references the SUBST target directory.
-        /// These are processes using the staging area - either the implant or its payloads.
-        /// </summary>
-        private async Task HuntBySubstTarget(string substTarget, string driveLetter, HashSet<int> killed)
-        {
-            try
-            {
-                using var searcher = new ManagementObjectSearcher(
-                    "SELECT ProcessId, Name, ExecutablePath, CommandLine FROM Win32_Process");
-
-                foreach (ManagementObject proc in searcher.Get())
-                {
-                    var exePath = proc["ExecutablePath"]?.ToString() ?? "";
-                    var cmdLine = proc["CommandLine"]?.ToString() ?? "";
-                    var pid = Convert.ToInt32(proc["ProcessId"]);
-                    var name = proc["Name"]?.ToString() ?? "";
-
-                    if (pid <= 4 || killed.Contains(pid)) continue;
-                    if (IsProtectedProcess(name)) continue;
-
-                    // Process is running FROM the SUBST target path (staged payload)
-                    if (exePath.StartsWith(substTarget) ||
-                        exePath.StartsWith($"{driveLetter}:"))
-                    {
-                        try
-                        {
-                            var process = Process.GetProcessById(pid);
-                            process.KillTree();
-                            killed.Add(pid);
-
-                            _logger.LogWarning(
-                                "[VolumeMountMonitor] KILLED staged payload: {Name} (PID {Pid}) running from SUBST target {Path}",
-                                name, pid, substTarget);
-
-                            await _detectionEngine.EmitAsync(new DetectionEvent
-                            {
-                                RuleName = "Staged Payload Killed: Running from SUBST Target",
-                                Evidence = $"Process {name} (PID {pid}) running from SUBST staging path: {exePath}",
-                                Reasoning = "Process was executing from the attacker's SUBST staging directory. This is a deployed payload. Killed.",
-                                Confidence = 0.93,
-                                Tier = DetectionTier.Tier1Behavioral,
-                                AuthorizedResponse = ResponseAction.KillProcessTree,
-                                ProcessName = name,
-                                ProcessId = pid
-                            });
-                        }
-                        catch { }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "[VolumeMountMonitor] HuntBySubstTarget failed");
-            }
-        }
-
-        /// <summary>
-        /// Last resort: kill any unsigned, non-system process started within the last 30 seconds.
-        /// If the implant is a custom binary calling DefineDosDevice directly (no subst.exe, no shell),
-        /// the only signal is that it started recently and isn't signed by a trusted publisher.
-        /// </summary>
-        private async Task HuntRecentlySpawnedUnsignedProcesses(string driveLetter, HashSet<int> killed)
-        {
-            try
-            {
-                var cutoff = DateTime.UtcNow.AddSeconds(-30);
-
-                using var searcher = new ManagementObjectSearcher(
-                    "SELECT ProcessId, Name, ExecutablePath, CreationDate, ParentProcessId FROM Win32_Process");
-
-                foreach (ManagementObject proc in searcher.Get())
-                {
-                    var pid = Convert.ToInt32(proc["ProcessId"]);
-                    var name = proc["Name"]?.ToString() ?? "";
-                    var exePath = proc["ExecutablePath"]?.ToString() ?? "";
-                    var creationStr = proc["CreationDate"]?.ToString() ?? "";
-
-                    if (pid <= 4 || killed.Contains(pid)) continue;
-                    if (IsProtectedProcess(name)) continue;
-                    if (string.IsNullOrEmpty(exePath)) continue;
-
-                    // Parse WMI datetime format
-                    if (!ManagementDateTimeConverter.ToDateTime(creationStr).ToUniversalTime().Equals(default) &&
-                        ManagementDateTimeConverter.ToDateTime(creationStr).ToUniversalTime() < cutoff)
-                        continue; // Process started more than 30s ago - probably not the creator
-
-                    // Check if it's from a suspicious path (not Program Files, not System32, and not game directories)
-                    // SECURITY: Also reject Temp/Downloads even if they contain "steam" in path
-                    // to prevent an attacker creating C:\Temp\steam\malware.exe to bypass this check.
-                    var lowerPath = exePath.ToLowerInvariant();
-                    bool isSuspiciousDropLocation = lowerPath.Contains(@"\temp\") ||
-                                                   lowerPath.Contains(@"\downloads\") ||
-                                                   lowerPath.Contains(@"\appdata\local\temp\");
-                    if (!isSuspiciousDropLocation &&
-                        (lowerPath.StartsWith(@"c:\windows\") ||
-                        lowerPath.StartsWith(@"c:\program files") ||
-                        SecurityValidation.IsGameOrAntiCheatPath(exePath)))
-                        continue;
-
-                    // This is a recently-spawned, non-system, non-standard-path process.
-                    // In the context of an active SUBST attack, this is likely the implant.
-                    try
-                    {
-                        var process = Process.GetProcessById(pid);
-                        process.KillTree();
-                        killed.Add(pid);
-
-                        _logger.LogWarning(
-                            "[VolumeMountMonitor] KILLED suspected implant: {Name} (PID {Pid}) - recently spawned from {Path}",
-                            name, pid, exePath);
-
-                        await _detectionEngine.EmitAsync(new DetectionEvent
-                        {
-                            RuleName = "Suspected Implant Killed: Recent Non-System Process During SUBST Attack",
-                            Evidence = $"Process {name} (PID {pid}) at {exePath} started within 30s of SUBST drive {driveLetter}: creation",
-                            Reasoning = "No subst.exe or shell process was found creating the drive. " +
-                                        "This recently-spawned process from a non-standard path is the most likely candidate - " +
-                                        "it called DefineDosDevice directly. Process tree killed.",
-                            Confidence = 0.80,
-                            Tier = DetectionTier.Tier1Behavioral,
-                            AuthorizedResponse = ResponseAction.KillProcessTree,
-                            ProcessName = name,
-                            ProcessId = pid
-                        });
-                    }
-                    catch { }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "[VolumeMountMonitor] HuntRecentlySpawnedUnsignedProcesses failed");
-            }
-        }
-
-        /// <summary>
-        /// Processes that should never be killed regardless of context.
-        /// </summary>
-        private static bool IsProtectedProcess(string name)
-        {
-            var lower = name.ToLowerInvariant().Replace(".exe", "");
-            return lower is "system" or "smss" or "csrss" or "wininit" or "winlogon"
-                or "services" or "lsass" or "svchost" or "dwm" or "explorer"
-                or "sihost" or "taskhostw" or "runtimebroker" or "searchhost"
-                or "windowssentinel" or "sentinelservice";
-        }
-
-        /// <summary>
-        /// Removes persistence mechanisms that recreate the SUBST drive:
-        /// 1. Run/RunOnce registry entries containing 'subst' + the drive letter
-        /// 2. Scheduled tasks with 'subst' in their action
-        /// 3. WMI event subscriptions that execute 'subst' commands
-        /// This ensures the attacker's drive doesn't come back after Sentinel removes it.
-        /// </summary>
-        private async Task RemoveSubstPersistence(string driveLetter)
+        private async Task ReportSubstPersistence(string driveLetter)
         {
             var normalizedLetter = driveLetter.TrimEnd('\\', ':').ToUpperInvariant();
-
-            // 1. Scan Run keys for subst persistence
-            await RemoveSubstFromRunKeys(normalizedLetter);
-
-            // 2. Scan and disable scheduled tasks with subst
-            await RemoveSubstScheduledTasks(normalizedLetter);
-
-            // 3. v1.4.1: Scan and remove WMI event subscriptions that recreate SUBST drives
-            await RemoveSubstWmiSubscriptions(normalizedLetter);
-        }
-
-        private async Task RemoveSubstFromRunKeys(string driveLetter)
-        {
-            // HKLM Run keys (always accessible from Session 0)
-            var lmRunPaths = new[]
+            if (!IsSingleDriveLetter(normalizedLetter)) return;
+            foreach (var path in new[]
             {
                 @"Software\Microsoft\Windows\CurrentVersion\Run",
                 @"Software\Microsoft\Windows\CurrentVersion\RunOnce",
-            };
-
-            foreach (var path in lmRunPaths)
+            })
             {
                 try
                 {
-                    using var key = Registry.LocalMachine.OpenSubKey(path, writable: true);
+                    using var key = Registry.LocalMachine.OpenSubKey(path, writable: false);
                     if (key == null) continue;
-
                     foreach (var valueName in key.GetValueNames())
                     {
                         var valueData = key.GetValue(valueName)?.ToString() ?? "";
-                        if (valueData.Contains("subst") &&
-                            valueData.Contains(driveLetter))
+                        if (valueData.IndexOf("subst", StringComparison.OrdinalIgnoreCase) < 0 ||
+                            valueData.IndexOf(normalizedLetter + ":", StringComparison.OrdinalIgnoreCase) < 0)
+                            continue;
+                        await _detectionEngine.EmitAsync(new DetectionEvent
                         {
-                            key.DeleteValue(valueName, throwOnMissingValue: false);
-                            _logger.LogWarning(
-                                "[VolumeMountMonitor] REMOVED SUBST persistence from registry: HKLM\\{Path}\\{Name} = {Value}",
-                                path, valueName, valueData);
-
-                            await _detectionEngine.EmitAsync(new DetectionEvent
-                            {
-                                RuleName = "Persistence Removed: SUBST Drive Registry Entry",
-                                Evidence = $"Deleted registry value '{valueName}' = '{valueData}' from HKLM\\{path}",
-                                Reasoning = "Registry Run key was recreating an attacker SUBST staging drive on every login. Entry removed to prevent persistence.",
-                                Confidence = 0.90,
-                                Tier = DetectionTier.Tier1Behavioral,
-                                AuthorizedResponse = ResponseAction.RemoveRegistryEntry,
-                                ProcessName = "SYSTEM",
-                                ProcessId = 0
-                            });
-                        }
+                            RuleName = "SUBST Drive Persistence Candidate (observe-only)",
+                            Evidence = $"HKLM\\{path}\\{valueName} references SUBST drive {normalizedLetter}:",
+                            Reasoning = "An autostart entry recreates a SUBST drive. Reported for review; Sentinel does not delete autostart entries on a substring match.",
+                            Confidence = 0.40,
+                            Tier = DetectionTier.Tier2Indicator,
+                            AuthorizedResponse = ResponseAction.LogOnly,
+                            ProcessName = "registry",
+                            ProcessId = 0
+                        }).ConfigureAwait(false);
                     }
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogDebug(ex, "[VolumeMountMonitor] Failed to scan HKLM Run key {Path}", path);
+                    _logger.LogDebug(ex, "[VolumeMountMonitor] SUBST persistence report failed for {Path}", path);
                 }
             }
-
-            // Per-user Run keys - must iterate HKU\<SID>\ since HKCU in Session 0 is SYSTEM's hive
-            var userRunPaths = new[]
-            {
-                @"Software\Microsoft\Windows\CurrentVersion\Run",
-                @"Software\Microsoft\Windows\CurrentVersion\RunOnce",
-            };
-
-            try
-            {
-                var profileList = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList");
-                if (profileList != null)
-                {
-                    foreach (var sidString in profileList.GetSubKeyNames())
-                    {
-                        foreach (var runPath in userRunPaths)
-                        {
-                            try
-                            {
-                                using var key = Registry.Users.OpenSubKey($@"{sidString}\{runPath}", writable: true);
-                                if (key == null) continue;
-
-                                foreach (var valueName in key.GetValueNames())
-                                {
-                                    var valueData = key.GetValue(valueName)?.ToString() ?? "";
-                                    if (valueData.Contains("subst") &&
-                                        valueData.Contains(driveLetter))
-                                    {
-                                        key.DeleteValue(valueName, throwOnMissingValue: false);
-                                        _logger.LogWarning(
-                                            "[VolumeMountMonitor] REMOVED SUBST persistence from registry: HKU\\{Sid}\\{Path}\\{Name} = {Value}",
-                                            sidString, runPath, valueName, valueData);
-
-                                        await _detectionEngine.EmitAsync(new DetectionEvent
-                                        {
-                                            RuleName = "Persistence Removed: SUBST Drive Registry Entry (User)",
-                                            Evidence = $"Deleted registry value '{valueName}' = '{valueData}' from HKU\\{sidString}\\{runPath}",
-                                            Reasoning = "Per-user registry Run key was recreating an attacker SUBST staging drive on login. Entry removed.",
-                                            Confidence = 0.90,
-                                            Tier = DetectionTier.Tier1Behavioral,
-                                            AuthorizedResponse = ResponseAction.RemoveRegistryEntry,
-                                            ProcessName = "SYSTEM",
-                                            ProcessId = 0
-                                        });
-                                    }
-                                }
-                            }
-                            catch { }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "[VolumeMountMonitor] Failed to scan user Run keys");
-            }
-        }
-
-        private async Task RemoveSubstScheduledTasks(string driveLetter)
-        {
-            try
-            {
-                // Use schtasks to enumerate and find tasks containing subst + our drive letter
-                var psi = new ProcessStartInfo
-                {
-                    FileName = "schtasks.exe",
-                    Arguments = "/Query /FO CSV /V",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                };
-                using var proc = Process.Start(psi);
-                if (proc == null) return;
-
-                var output = await proc.StandardOutput.ReadToEndAsync();
-                await proc.WaitForExitAsync();
-
-                // Parse CSV output for tasks with subst + drive letter in "Task To Run" column
-                var lines = output.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                foreach (var line in lines)
-                {
-                    if (line.Contains("subst") &&
-                        line.Contains(driveLetter))
-                    {
-                        // Extract task name (first CSV field after header)
-                        var fields = line.Split(',');
-                        if (fields.Length < 2) continue;
-                        var taskName = fields[0].Trim('"', ' ');
-                        if (string.IsNullOrEmpty(taskName) || taskName.StartsWith("TaskName")) continue;
-
-                        // Delete the scheduled task
-                        var deletePsi = new ProcessStartInfo
-                        {
-                            FileName = "schtasks.exe",
-                            Arguments = $"/Delete /TN \"{taskName}\" /F",
-                            UseShellExecute = false,
-                            CreateNoWindow = true
-                        };
-                        using var deleteProc = Process.Start(deletePsi);
-                        deleteProc?.WaitForExit(10000);
-
-                        _logger.LogWarning(
-                            "[VolumeMountMonitor] REMOVED SUBST persistence scheduled task: {TaskName}",
-                            taskName);
-
-                        await _detectionEngine.EmitAsync(new DetectionEvent
-                        {
-                            RuleName = "Persistence Removed: SUBST Drive Scheduled Task",
-                            Evidence = $"Deleted scheduled task '{taskName}' that was recreating SUBST drive {driveLetter}:",
-                            Reasoning = "A scheduled task was responsible for persistently recreating an attacker SUBST staging drive. Task deleted.",
-                            Confidence = 0.90,
-                            Tier = DetectionTier.Tier1Behavioral,
-                            AuthorizedResponse = ResponseAction.KillProcessTree,
-                            ProcessName = "schtasks",
-                            ProcessId = 0
-                        });
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "[VolumeMountMonitor] Failed to scan scheduled tasks for SUBST persistence");
-            }
-        }
-
-        /// <summary>
-        /// v1.4.1: Removes WMI event subscriptions that contain 'subst' + the drive letter.
-        /// An attacker can use WMI persistence (__EventFilter + CommandLineEventConsumer)
-        /// to recreate SUBST drives periodically, bypassing Run key and scheduled task detection.
-        /// </summary>
-        private async Task RemoveSubstWmiSubscriptions(string driveLetter)
-        {
-            try
-            {
-                var scope = new ManagementScope(@"root\subscription");
-                scope.Connect();
-
-                // Check CommandLineEventConsumer instances for subst commands
-                using var consumerSearcher = new ManagementObjectSearcher(scope,
-                    new ObjectQuery("SELECT * FROM CommandLineEventConsumer"));
-
-                foreach (ManagementObject consumer in consumerSearcher.Get())
-                {
-                    var cmdLine = consumer["CommandLineTemplate"]?.ToString() ?? "";
-                    var execPath = consumer["ExecutablePath"]?.ToString() ?? "";
-                    var name = consumer["Name"]?.ToString() ?? "";
-
-                    bool isSubstPersistence =
-                        (cmdLine.Contains("subst") ||
-                         execPath.Contains("subst")) &&
-                        (cmdLine.Contains(driveLetter) ||
-                         execPath.Contains(driveLetter));
-
-                    // Also catch DefineDosDevice-based persistence
-                    if (!isSubstPersistence)
-                    {
-                        isSubstPersistence =
-                            cmdLine.Contains("DefineDosDevice") &&
-                            cmdLine.Contains(driveLetter);
-                    }
-
-                    if (isSubstPersistence)
-                    {
-                        try
-                        {
-                            consumer.Delete();
-                            _logger.LogWarning(
-                                "[VolumeMountMonitor] REMOVED WMI SUBST persistence consumer: '{Name}' cmd='{Cmd}'",
-                                name, cmdLine);
-
-                            // Also find and delete the associated filter and binding
-                            await RemoveWmiBindingsForConsumer(scope, name);
-
-                            await _detectionEngine.EmitAsync(new DetectionEvent
-                            {
-                                RuleName = "Persistence Removed: SUBST Drive WMI Subscription",
-                                Evidence = $"Deleted WMI CommandLineEventConsumer '{name}' that recreates SUBST drive {driveLetter}: via '{cmdLine}'",
-                                Reasoning = "A WMI event subscription was configured to persistently recreate an attacker SUBST staging drive. " +
-                                            "WMI persistence survives reboots and is invisible to Run key / scheduled task scanners. Subscription removed.",
-                                Confidence = 0.92,
-                                Tier = DetectionTier.Tier1Behavioral,
-                                AuthorizedResponse = ResponseAction.LogOnly,
-                                ProcessName = "SYSTEM",
-                                ProcessId = 0
-                            });
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogDebug(ex, "[VolumeMountMonitor] Failed to delete WMI consumer {Name}", name);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "[VolumeMountMonitor] Failed to scan WMI subscriptions for SUBST persistence");
-            }
-        }
-
-        private static async Task RemoveWmiBindingsForConsumer(ManagementScope scope, string consumerName)
-        {
-            try
-            {
-                // Find FilterToConsumerBinding entries that reference this consumer
-                using var bindingSearcher = new ManagementObjectSearcher(scope,
-                    new ObjectQuery("SELECT * FROM __FilterToConsumerBinding"));
-
-                foreach (ManagementObject binding in bindingSearcher.Get())
-                {
-                    var consumerRef = binding["Consumer"]?.ToString() ?? "";
-                    if (consumerRef.Contains(consumerName))
-                    {
-                        // Extract filter name from binding and delete the filter
-                        var filterRef = binding["Filter"]?.ToString() ?? "";
-                        binding.Delete();
-
-                        // Try to delete the associated EventFilter
-                        if (!string.IsNullOrEmpty(filterRef))
-                        {
-                            try
-                            {
-                                using var filterSearcher = new ManagementObjectSearcher(scope,
-                                    new ObjectQuery("SELECT * FROM __EventFilter"));
-                                foreach (ManagementObject filter in filterSearcher.Get())
-                                {
-                                    var path = filter.Path.Path ?? "";
-                                    if (filterRef.Contains(filter["Name"]?.ToString() ?? "~NOMATCH~",
-                                        StringComparison.OrdinalIgnoreCase))
-                                    {
-                                        filter.Delete();
-                                        break;
-                                    }
-                                }
-                            }
-                            catch { }
-                        }
-                    }
-                }
-            }
-            catch { }
-            await Task.CompletedTask;
         }
 
         /// <summary>

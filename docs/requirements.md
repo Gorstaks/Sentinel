@@ -1,8 +1,22 @@
 # Sentinel - Requirements
 
-**Version: 3.6.6**
+**Version: 3.7.1**
 
 Primary audience: a standalone home/gaming PC owner, including a potentially targeted individual. Preserve normal browsing, games, downloads and user-initiated streaming/media use; do not assume another antivirus or corporate infrastructure. Security decisions must remain explainable under a source-aware attacker.
+
+### Red/blue audit remediation (3.7.1)
+
+- No unauthenticated dashboard response may contain the bearer token. `GET /` without `?token=` returns a secret-free bootstrap page. Requests must carry a loopback dashboard `Host` and, when present, the dashboard `Origin`. The query token is accepted only for `GET /` and the WebSocket upgrade. Pages send a restrictive CSP and `Referrer-Policy: no-referrer`. Request bodies are size-capped and errors do not return exception text.
+- The service must not register or start from an install directory that a non-administrator can write to (`InstallDirectoryPolicy`). Setup installs only under Program Files and does not run a recursive ACL reset on any other path.
+- `%ProgramData%\Sentinel` and its `Secure` directory are re-owned, re-ACLed and verified before an IPC key is stored. A key file that is not SYSTEM/Administrators-owned, or that another principal can write, is discarded. The pipe name is claimed with `FILE_FLAG_FIRST_PIPE_INSTANCE` and a standing instance. The client sends a signed request only to a session-0 server whose image is the installed `Sentinel.Service.exe`.
+- A SUBST drive (creatable by any user) shall be dismounted and reported. It shall not authorize killing any process, its parent, or "recently started" processes, and shall not delete autostart entries, scheduled tasks or WMI subscriptions on a substring match. Those outcomes are Tier2 / LogOnly reports.
+- An ancestor-chain kill must not target an ancestor solely because it is a parent. An ancestor with unresolved identity, a valid Authenticode signature, an image under Windows/Program Files (excluding default-writable drop folders), or a known security/VPN product name under Program Files is preserved. Protected-process name checks are case-insensitive.
+- `RemoveRegistryEntry` deletes only (a) a value under the exact HKLM/HKCU Run/RunOnce or browser extension-forcelist roots, (b) a Win32 service subkey under `System\CurrentControlSet\Services` that is not a protected service, or (c) an exact `CLSID\{guid}\InprocServer32` entry. The live value/image must still match what the monitor observed, and service/COM targets must point at a user-writable location. Anything else is refused and recorded.
+- Path-based quarantine refuses a file with a reparse point in its path or more than one hard link. The `takeown`/`icacls` fallback is removed. ISO containment moves a plain `.iso`/`.img` into the vault instead of deleting it.
+- Name/path heuristics (installer, DirectX/redist, ancestry-root names) demote a detection only with a non-attacker-controlled anchor: the real Windows system directory, a Program Files image, or a valid signature. "Microsoft-signed" means an exact known Microsoft common name, not a substring. Signature-cache entries are keyed on size, timestamps and a content fingerprint.
+- Cast-device firewall blocks share the MitM posture gate and never target the gateway, DNS/DHCP servers, multicast or link-local addresses.
+- Self-protection additionally hashes every `Sentinel*` binary next to the service and checks that the registered service `ImagePath` names the running executable. ETW session enumeration uses the native `EVENT_TRACE_PROPERTIES` layout. `NtTraceEvent` prologue changes are reported. All three are Tier2 / LogOnly.
+- `LGPO.exe` runs only when it has a valid Microsoft Corporation signature. Release CI pins third-party actions to commit SHAs, pins Inno Setup and checks its signature, requires signing when a signing secret is configured, flags unsigned installers in the release notes, and accepts a manual publish only from main/master.
 
 ### Integrated NanoAV coverage (3.4.5)
 

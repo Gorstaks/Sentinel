@@ -432,13 +432,25 @@ namespace Sentinel.Core
                 return;
             }
 
+            // 3.7.1: a firewall mutation is gated like the kill below, and never targets the
+            // gateway, DNS/DHCP servers, multicast or link-local addresses (a LAN host that can
+            // complete a handshake on a cast port must not be able to cut the host off its own network).
+            if (!ProductPosture.AllowsMitmDefenseMutations(_config))
+                return;
+            if (IsProtectedInfrastructureAddress(parsed))
+            {
+                _logger.LogWarning("[CastDeviceGuard] Refusing firewall block for protected infrastructure address {IP}", ip);
+                return;
+            }
+
             ip = parsed.ToString();
             if (_blockedIps.ContainsKey(ip)) return;
             try
             {
                 var safeLabel = ip.Replace('.', '_').Replace(':', '_');
                 var ruleName = $"{CastBlockRulePrefix}{safeLabel}";
-                var psi = new ProcessStartInfo("netsh",
+                var netsh = System.IO.Path.Combine(Environment.SystemDirectory, "netsh.exe");
+                var psi = new ProcessStartInfo(netsh,
                     $"advfirewall firewall add rule name=\"{ruleName}-OUT\" dir=out action=block remoteip={ip} enable=yes")
                 {
                     UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true
@@ -457,6 +469,32 @@ namespace Sentinel.Core
             {
                 _logger.LogDebug(ex, "[CastDeviceGuard] Firewall rule failed for {IP}", ip);
             }
+        }
+
+        internal static bool IsProtectedInfrastructureAddress(IPAddress address)
+        {
+            if (address.IsIPv6Multicast || address.IsIPv6LinkLocal) return true;
+            var bytes = address.GetAddressBytes();
+            if (bytes.Length == 4)
+            {
+                if (bytes[0] >= 224) return true;                       // multicast / reserved / broadcast
+                if (bytes[0] == 169 && bytes[1] == 254) return true;   // link-local
+            }
+            try
+            {
+                foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    var props = nic.GetIPProperties();
+                    foreach (var gw in props.GatewayAddresses) if (gw.Address.Equals(address)) return true;
+                    foreach (var dns in props.DnsAddresses) if (dns.Equals(address)) return true;
+                    foreach (var dhcp in props.DhcpServerAddresses) if (dhcp.Equals(address)) return true;
+                }
+            }
+            catch (System.Net.NetworkInformation.NetworkInformationException)
+            {
+                return true; // cannot enumerate infrastructure addresses: fail closed, do not block
+            }
+            return false;
         }
 
         private static bool IsPrivateIp(string ip)

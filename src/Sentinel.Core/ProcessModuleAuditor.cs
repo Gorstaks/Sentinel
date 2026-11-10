@@ -155,7 +155,7 @@ namespace Sentinel.Core
                     }
 
                     entry.IsMicrosoftSigned = entry.IsSigned &&
-                        (entry.Publisher.IndexOf("Microsoft", StringComparison.OrdinalIgnoreCase) >= 0);
+                        MicrosoftPublisher.IsMicrosoftCommonName(entry.Publisher);
 
                     // Path trees
                     entry.IsKeepTree = ModuleIdentity.IsKeepTree(mod.Path);
@@ -253,8 +253,8 @@ namespace Sentinel.Core
                 using var cert2 = new X509Certificate2(cert);
                 string subject = cert2.Subject ?? string.Empty;
                 string signer = cert2.GetNameInfo(X509NameType.SimpleName, false) ?? subject;
-                bool isMs = signer.IndexOf("Microsoft", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            subject.IndexOf("Microsoft", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool isMs = MicrosoftPublisher.IsMicrosoftCommonName(signer) ||
+                            MicrosoftPublisher.IsMicrosoftCommonName(subject);
                 return (true, isMs, signer);
             }
             catch

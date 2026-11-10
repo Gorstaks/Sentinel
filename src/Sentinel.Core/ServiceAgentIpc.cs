@@ -74,6 +74,9 @@ namespace Sentinel.Core
             {
                 var path = TokenPath;
                 if (!File.Exists(path)) return null;
+                // 3.7.1: a token file that is not SYSTEM/Administrators-owned, or that someone else
+                // can write, may have been planted. Do not sign requests with a key we cannot trust.
+                if (!ProgramDataGuard.IsTrustedFile(path)) return null;
                 var bytes = File.ReadAllBytes(path);
                 return bytes.Length == 32 ? bytes : null;
             }
@@ -87,6 +90,10 @@ namespace Sentinel.Core
         {
             var path = TokenPath;
             var dir = Path.GetDirectoryName(path)!;
+
+            // 3.7.1: a pre-created data root or Secure directory is owned by whoever made it. Take
+            // ownership, rewrite a protected ACL and verify, failing closed if that cannot be proven.
+            ProgramDataGuard.EnsureProtectedDirectory(Path.GetDirectoryName(dir)!, interactiveReadExecute: true);
             if (!Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
 
@@ -98,13 +105,18 @@ namespace Sentinel.Core
                 try
                 {
                     var existing = File.ReadAllBytes(path);
-                    if (existing.Length == 32)
+                    // Only reuse a key that has the right size AND a trusted owner/ACL. A planted
+                    // token with a key the attacker chose is discarded and regenerated below.
+                    if (existing.Length == 32 && ProgramDataGuard.IsTrustedFile(path))
                     {
                         LockTokenAcl(path);
                         return existing;
                     }
                 }
-                catch { }
+                catch (IOException ex)
+                {
+                    System.Diagnostics.Trace.TraceWarning("[ServiceAgentIpc] Existing IPC token unreadable, regenerating: " + ex.Message);
+                }
             }
 
             var token = new byte[32];
@@ -183,30 +195,9 @@ namespace Sentinel.Core
         /// </summary>
         private static void LockDirectoryAcl(string dirPath)
         {
-            try
-            {
-                var dirInfo = new DirectoryInfo(dirPath);
-                var security = dirInfo.GetAccessControl();
-                security.SetAccessRuleProtection(true, false);
-
-                var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
-                security.AddAccessRule(new FileSystemAccessRule(
-                    system, FileSystemRights.FullControl,
-                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-                    PropagationFlags.None, AccessControlType.Allow));
-
-                var admins = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
-                security.AddAccessRule(new FileSystemAccessRule(
-                    admins, FileSystemRights.FullControl,
-                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-                    PropagationFlags.None, AccessControlType.Allow));
-
-                dirInfo.SetAccessControl(security);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[ServiceAgentIpc] LockDirectoryAcl failed: {ex.Message}");
-            }
+            // 3.7.1: fail closed. The token directory must provably be SYSTEM/Administrators-only
+            // before a key is stored in it; a swallowed ACL failure used to leave it exposed.
+            ProgramDataGuard.EnsureProtectedDirectory(dirPath, interactiveReadExecute: false);
         }
 
         /// <summary>
@@ -335,17 +326,40 @@ namespace Sentinel.Core
                 return;
             }
 
+            // 3.7.1: claim the pipe name with FirstPipeInstance so a process that squatted it before
+            // the service started is detected (creation fails) rather than silently served.
+            NamedPipeServerStream? current = null;
+            for (int attempt = 0; attempt < 10 && current == null && !stoppingToken.IsCancellationRequested; attempt++)
+            {
+                try { current = CreatePipe(firstInstance: true); }
+                catch (Exception ex) when (!(ex is OperationCanceledException))
+                {
+                    _logger.LogError(ex, "[IPC] Pipe name '{Pipe}' is held by another process (attempt {Attempt}); possible squatter or stale instance",
+                        ServiceAgentIpc.InstancePipeName, attempt + 1);
+                    try { await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { return; }
+                }
+            }
+            if (current == null)
+            {
+                _logger.LogError("[IPC] Could not claim the IPC pipe name; IPC host disabled (fail closed).");
+                return;
+            }
+
             while (!stoppingToken.IsCancellationRequested)
             {
-                NamedPipeServerStream? pipe = null;
+                NamedPipeServerStream? next = null;
                 try
                 {
-                    pipe = CreatePipe();
-                    await pipe.WaitForConnectionAsync(stoppingToken).ConfigureAwait(false);
-                    await HandleClientAsync(pipe, stoppingToken).ConfigureAwait(false);
+                    await current.WaitForConnectionAsync(stoppingToken).ConfigureAwait(false);
+                    // Standing instance: the next listener exists before this client is served, so
+                    // the name is never unowned between clients.
+                    next = CreatePipe(firstInstance: false);
+                    await HandleClientAsync(current, stoppingToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
+                    try { next?.Dispose(); } catch (ObjectDisposedException) { }
                     break;
                 }
                 catch (Exception ex)
@@ -354,12 +368,30 @@ namespace Sentinel.Core
                 }
                 finally
                 {
-                    try { pipe?.Dispose(); } catch { }
+                    try { current.Dispose(); } catch (ObjectDisposedException) { }
                 }
+
+                current = next ?? TryCreateStandingPipe();
+                if (current == null)
+                {
+                    _logger.LogError("[IPC] Could not re-create the IPC pipe instance; IPC host stopping.");
+                    break;
+                }
+            }
+            try { current?.Dispose(); } catch (ObjectDisposedException) { }
+        }
+
+        private NamedPipeServerStream? TryCreateStandingPipe()
+        {
+            try { return CreatePipe(firstInstance: false); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[IPC] Failed to create pipe instance");
+                return null;
             }
         }
 
-        private static NamedPipeServerStream CreatePipe()
+        private static NamedPipeServerStream CreatePipe(bool firstInstance)
         {
             var security = new PipeSecurity();
             var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
@@ -374,6 +406,9 @@ namespace Sentinel.Core
             security.AddAccessRule(new PipeAccessRule(
                 admins, PipeAccessRights.ReadWrite, AccessControlType.Allow));
 
+            if (firstInstance)
+                return CreateFirstInstance(ServiceAgentIpc.InstancePipeName, security);
+
             return new NamedPipeServerStream(
                 ServiceAgentIpc.InstancePipeName,
                 PipeDirection.InOut,
@@ -383,6 +418,57 @@ namespace Sentinel.Core
                 0,
                 0,
                 security);
+        }
+
+        // .NET Framework only maps FILE_FLAG_FIRST_PIPE_INSTANCE when maxInstances == 1, which would
+        // forbid the standing second instance. Create the first instance natively instead.
+        private const uint PipeAccessDuplex = 0x00000003;
+        private const uint FileFlagOverlapped = 0x40000000;
+        private const uint FileFlagFirstPipeInstance = 0x00080000;
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct SecurityAttributes
+        {
+            public int nLength;
+            public IntPtr lpSecurityDescriptor;
+            public int bInheritHandle;
+        }
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint = "CreateNamedPipeW", SetLastError = true,
+            CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern Microsoft.Win32.SafeHandles.SafePipeHandle CreateNamedPipeNative(
+            string name, uint openMode, uint pipeMode, uint maxInstances, uint outBuffer, uint inBuffer,
+            uint defaultTimeout, ref SecurityAttributes attributes);
+
+        private static NamedPipeServerStream CreateFirstInstance(string pipeName, PipeSecurity security)
+        {
+            var descriptor = security.GetSecurityDescriptorBinaryForm();
+            var buffer = System.Runtime.InteropServices.Marshal.AllocHGlobal(descriptor.Length);
+            try
+            {
+                System.Runtime.InteropServices.Marshal.Copy(descriptor, 0, buffer, descriptor.Length);
+                var attributes = new SecurityAttributes
+                {
+                    nLength = System.Runtime.InteropServices.Marshal.SizeOf(typeof(SecurityAttributes)),
+                    lpSecurityDescriptor = buffer,
+                    bInheritHandle = 0,
+                };
+                var handle = CreateNamedPipeNative(@"\\.\pipe\" + pipeName,
+                    PipeAccessDuplex | FileFlagOverlapped | FileFlagFirstPipeInstance,
+                    0, 2, 0, 0, 0, ref attributes);
+                if (handle.IsInvalid)
+                {
+                    var error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                    handle.Dispose();
+                    // ERROR_ACCESS_DENIED / ERROR_PIPE_BUSY here mean the name already exists.
+                    throw new UnauthorizedAccessException("CreateNamedPipe(first instance) failed with Win32 error " + error);
+                }
+                return new NamedPipeServerStream(PipeDirection.InOut, true, false, handle);
+            }
+            finally
+            {
+                System.Runtime.InteropServices.Marshal.FreeHGlobal(buffer);
+            }
         }
 
         private async Task HandleClientAsync(NamedPipeServerStream pipe, CancellationToken ct)
@@ -746,6 +832,9 @@ namespace Sentinel.Core
                 var connectTask = pipe.ConnectAsync(timeoutMs);
                 await BoundedIpcRequest.WithinDeadlineAsync(connectTask, deadline.Token).ConfigureAwait(false);
                 if (!pipe.IsConnected) return null;
+
+                // 3.7.1: do not hand a signed request to whatever owns the pipe name.
+                if (!PipeServerIdentity.IsLegitimateService(pipe.SafePipeHandle)) return null;
 
                 var ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 var nonce = Guid.NewGuid().ToString("N");

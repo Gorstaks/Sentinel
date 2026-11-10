@@ -95,6 +95,15 @@ namespace Sentinel.Core
                 if (!File.Exists(serviceExe))
                     return 2;
 
+                // 3.7.1: the service runs as LocalSystem from this directory. Refuse to register it
+                // from a location a non-administrator can write to.
+                var policy = InstallDirectoryPolicy.Evaluate(installDir);
+                if (!policy.Ok)
+                {
+                    Console.Error.WriteLine("Sentinel install refused: " + policy.Reason);
+                    return 3;
+                }
+
                 EnsureService(serviceExe);
                 EnsureWatchdogService(serviceExe);
                 EnsureAgentRunKey(agentExe);
@@ -203,7 +212,7 @@ namespace Sentinel.Core
         public static void EnsureService(string serviceExePath)
         {
             var full = Path.GetFullPath(serviceExePath);
-            var quoted = full.Contains(" ") ? $"\"{full}\"" : full;
+            var quoted = $"\"{full}\""; // always quoted (3.7.1)
 
             var scm = OpenSCManager(null, null, ScManagerAllAccess);
             if (scm == IntPtr.Zero)
@@ -396,7 +405,7 @@ namespace Sentinel.Core
         public static void EnsureWatchdogService(string serviceExePath)
         {
             var full = Path.GetFullPath(serviceExePath);
-            var quoted = (full.Contains(" ") ? $"\"{full}\"" : full) + " --watchdog";
+            var quoted = $"\"{full}\"" + " --watchdog"; // always quoted (3.7.1)
             var scm = OpenSCManager(null, null, ScManagerAllAccess);
             if (scm == IntPtr.Zero) return;
             try
