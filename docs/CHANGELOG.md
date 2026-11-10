@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.7.2] - 2026-11-10
+### Fixed
+- **Dashboard showed "Coverage status: Unavailable - Sensor collection health unavailable".** The 3.7.1 pipe-server identity check (`PipeServerIdentity`) used `ProcessIdToSessionId` on the service's process ID. That call needs a handle to the SYSTEM service process, which a standard or non-elevated user is denied. The check therefore failed, and the Agent refused to send every IPC request, including `health`. The server session is now read from the pipe handle with `GetNamedPipeServerSessionId`, which needs no access to the server process. The protection is unchanged: the server must be in session 0, where a standard user cannot start a process. If its image is readable, it must be the installed `Sentinel.Service.exe`.
+### Tests
+- `PipeServerIdentity_AcceptsSessionZeroServiceEvenWhenProcessCannotBeOpened` covers the unreadable-image case that 3.7.1 got wrong, and still refuses a user-session server or a session-0 server with a different image.
+
 ## [3.7.1] - 2026-11-10
 Red/blue audit remediation. A source-aware review looked for paths where an attacker-controlled signal could steer SYSTEM, where a local user could reach a secret, and where trust was keyed on a name. This release closes them. See `docs/THREAT_MODEL.md` ("Red/blue audit remediation (3.7.1)") for residual limits.
 ### Security - local attack surface

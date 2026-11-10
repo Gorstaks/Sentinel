@@ -452,6 +452,17 @@ namespace Sentinel.Tests
         }
 
         [Fact]
+        public void PipeServerIdentity_AcceptsSessionZeroServiceEvenWhenProcessCannotBeOpened()
+        {
+            // A standard user cannot open the SYSTEM service process: the image is unreadable.
+            Assert.True(PipeServerIdentity.IsAcceptable(0, () => null));
+            Assert.True(PipeServerIdentity.IsAcceptable(0, () => Path.Combine(AppContext.BaseDirectory, "Sentinel.Service.exe")));
+            // A user-session squatter, or a session-0 server running a different image, is refused.
+            Assert.False(PipeServerIdentity.IsAcceptable(1, () => null));
+            Assert.False(PipeServerIdentity.IsAcceptable(0, () => @"C:\Users\a\AppData\Local\Temp\evil.exe"));
+        }
+
+        [Fact]
         public void PipeServerIdentity_RequiresTheInstalledServiceImage()
         {
             Assert.True(PipeServerIdentity.IsExpectedServiceImage(Path.Combine(AppContext.BaseDirectory, "Sentinel.Service.exe")));
