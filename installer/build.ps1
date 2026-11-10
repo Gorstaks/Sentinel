@@ -236,7 +236,13 @@ $DefaultIsccPaths = @(
 )
 
 $IsccPath = $null
+# 3.7.1: an explicitly verified compiler (release CI sets this after hash + signature checks) wins.
+if ($env:SENTINEL_ISCC) {
+    if (-not (Test-Path -LiteralPath $env:SENTINEL_ISCC)) { throw "SENTINEL_ISCC points to a missing file: $env:SENTINEL_ISCC" }
+    $IsccPath = $env:SENTINEL_ISCC
+}
 foreach ($Path in $DefaultIsccPaths) {
+    if ($IsccPath) { break }
     if (Test-Path $Path) {
         $IsccPath = $Path
         break

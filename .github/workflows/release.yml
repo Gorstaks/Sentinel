@@ -163,22 +163,32 @@ jobs:
         shell: pwsh
         run: ./tools/validation/SummarizeWindowsTests.ps1
 
-      # build.ps1 requires the Inno Setup compiler (ISCC.exe). The Chocolatey package
-      # installs it to C:\Program Files (x86)\Inno Setup 6\ - one of the paths build.ps1
-      # already probes.
+      # build.ps1 requires the Inno Setup compiler (ISCC.exe). The verified path is handed to
+      # build.ps1 through SENTINEL_ISCC so it cannot fall back to a different compiler.
       - name: Install Inno Setup
         if: steps.exists.outputs.skip == 'false'
         shell: pwsh
-        # 3.7.1: pinned version, and the compiler that builds the installer must carry a valid
-        # Authenticode signature before it runs in a job that holds contents: write.
+        # 3.7.1: Inno Setup 7 (the version setup.iss is developed against; Inno 6 rejects some of its
+        # [Code]) from the official GitHub release, pinned by SHA-256 and Authenticode publisher, so
+        # the compiler that builds the installer is verified before it runs in a job that holds
+        # contents: write. Chocolatey does not package Inno Setup 7.
         run: |
-          choco install innosetup --version 6.7.1 --no-progress -y
-          if ($LASTEXITCODE -ne 0) { throw "Inno Setup install failed" }
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $url = 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe'
+          $expected = '8A5A6711C3766A6E5FB74F280BA0E3551E719CE94538D901FDBD1F8F9920B3F0'
+          $installer = Join-Path $env:RUNNER_TEMP 'innosetup-7.1.1-x64.exe'
+          Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $installer
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash
+          if ($hash -ne $expected) { throw "Inno Setup installer hash mismatch: $hash" }
+          $sig = Get-AuthenticodeSignature -FilePath $installer
+          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch '^CN=Pyrsys B\.V\.,') { throw "Inno Setup installer signature is not valid Pyrsys B.V.: $($sig.Status) $($sig.SignerCertificate.Subject)" }
+          $p = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/ALLUSERS' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Inno Setup install failed with exit code $($p.ExitCode)" }
+          $iscc = "$env:ProgramFiles\Inno Setup 7\ISCC.exe"
           if (-not (Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
-          $sig = Get-AuthenticodeSignature -FilePath $iscc
-          if ($sig.Status -ne 'Valid') { throw "ISCC.exe signature is $($sig.Status)" }
-          Write-Host "ISCC.exe signed by: $($sig.SignerCertificate.Subject)"
+          $isccSig = Get-AuthenticodeSignature -FilePath $iscc
+          if ($isccSig.Status -ne 'Valid') { throw "ISCC.exe signature is $($isccSig.Status)" }
+          Write-Host "ISCC.exe signed by: $($isccSig.SignerCertificate.Subject)"
+          "SENTINEL_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       # Reuse the exact local build path: stamps every csproj + setup.iss from version.txt,
       # publishes Service + Agent (net48, framework-dependent), compiles the installer with

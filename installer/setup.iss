@@ -101,7 +101,10 @@ begin
     for i := 0 to Procs.Count - 1 do
     begin
       P := Procs.ItemIndex(i);
-      ExeName := Lowercase(P.Name);
+      // Assign the Variant to a String before calling Lowercase: Inno Setup 6 rejects a Variant
+      // argument to a String parameter ("Type mismatch"); Inno Setup 7 converted it implicitly.
+      ExeName := P.Name;
+      ExeName := Lowercase(ExeName);
       ExePath := '';
       if not VarIsNull(P.ExecutablePath) then
         ExePath := P.ExecutablePath;
