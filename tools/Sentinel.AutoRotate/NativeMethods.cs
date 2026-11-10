@@ -1,7 +1,7 @@
 // Sentinel.AutoRotate - P/Invoke declarations.
 //
 // All calls are synchronous. APIs:
-//   netapi32.dll  : NetUserGetInfo, NetUserSetInfo (level 1003), NetUserModalsGet, NetApiBufferFree
+//   netapi32.dll  : NetUserGetInfo, NetUserSetInfo (level 1003), NetUserModalsGet, NetUserModalsSet (level 1001), NetApiBufferFree
 //   advapi32.dll  : LsaOpenPolicy / LsaStorePrivateData / LsaClose (legacy autologon cleanup only)
 //   kernel32.dll  : WTSGetActiveConsoleSessionId, GetTickCount64
 //   wtsapi32.dll  : WTSQuerySessionInformation / WTSFreeMemory
@@ -67,6 +67,19 @@ internal static class NativeMethods
         [MarshalAs(UnmanagedType.LPWStr)] string? servername,
         uint level,
         out IntPtr bufptr);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct USER_MODALS_INFO_1001
+    {
+        public uint usrmod1001_min_passwd_len;
+    }
+
+    [DllImport("netapi32.dll", CharSet = CharSet.Unicode)]
+    internal static extern uint NetUserModalsSet(
+        [MarshalAs(UnmanagedType.LPWStr)] string? servername,
+        uint level,
+        ref USER_MODALS_INFO_1001 buf,
+        out uint parm_err);
 
     [DllImport("netapi32.dll")]
     internal static extern uint NetApiBufferFree(IntPtr buffer);

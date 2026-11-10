@@ -14,6 +14,9 @@ A source-aware red/blue review found paths where an attacker-controlled signal c
 - **Name-keyed trust.** Ancestry-root names, installer/redist names and "Microsoft" substrings no longer grant demotion or trust without a trusted-root location, the real system directory, or an exact Microsoft signer identity.
 - **Blind spots.** ETW session enumeration used a wrong struct offset and likely never read session names. It now uses the native layout. `NtTraceEvent` modification, companion-binary replacement and a rewritten service `ImagePath` are now reported (Tier2 / LogOnly).
 
+- **Mass-deletion scope.** Temp-directory deletions no longer count toward the wiper threshold (this removes a kill on test runners and build tools). Tradeoff: a wiper confined to Temp is not detected by this rule. That is no loss of user data. Deletions elsewhere count as before, and Temp deletions do not dilute them.
+- **Default password policy.** The shipped template no longer allows blank, simple or reused passwords machine-wide. Only an opted-in AutoRotate install lowers the minimum length, and it restores the original on uninstall.
+
 Still not addressed (documented limits): process ghosting/herpaderping, direct/indirect syscalls and unhooking, reflective .NET loading, Kerberoasting, kernel attackers, and evasion that stays below the published Tier1 confidence floor or spreads activity across short-lived PIDs.
 
 ## Pending automatic exploit maintenance

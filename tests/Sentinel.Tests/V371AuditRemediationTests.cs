@@ -364,6 +364,59 @@ namespace Sentinel.Tests
             Assert.True(EtwProviderTamperMonitor.LooksPatched(reference, new byte[] { 0x48, 0x33, 0xC0, 0xB8, 0x5E, 0, 0, 0 }, 8));
         }
 
+        //  Mass-deletion false positive (dotnet test / build cleanup) 
+
+        private static FusedTelemetryContext Delete(int pid, string path) => new FusedTelemetryContext
+        {
+            ProcessId = pid,
+            ProcessName = "renamed-tool",
+            TriggeringEvent = new FileActivityTelemetry { ProcessId = pid, ProcessName = "renamed-tool", FilePath = path, OperationType = "DELETE" }
+        };
+
+        [Fact]
+        public void MassDeletion_StillFiresTier1OnUserDataDeletion()
+        {
+            var rule = new SlidingWindowMassDeletionRule();
+            DetectionEvent? result = null;
+            for (int i = 0; i < 100 && result == null; i++)
+                result = rule.Evaluate(Delete(31001, $@"C:\Users\a\Documents\file{i}.docx"));
+            Assert.NotNull(result);
+            Assert.Equal(DetectionTier.Tier1Behavioral, result!.Tier);
+            Assert.Equal(ResponseAction.KillProcessTree, result.AuthorizedResponse);
+        }
+
+        [Theory]
+        [InlineData(@"C:\Users\a\AppData\Local\Temp\sentinel_test_{0}\x.bin")]
+        [InlineData(@"\Device\HarddiskVolume3\Users\a\AppData\Local\Temp\build_{0}.obj")]
+        [InlineData(@"C:\Windows\Temp\setup_{0}.tmp")]
+        public void MassDeletion_IgnoresTempScratchCleanup(string pattern)
+        {
+            var rule = new SlidingWindowMassDeletionRule();
+            for (int i = 0; i < 400; i++)
+                Assert.Null(rule.Evaluate(Delete(31002, string.Format(pattern, i))));
+        }
+
+        [Fact]
+        public void MassDeletion_TempCleanupDoesNotMaskUserDataDeletion()
+        {
+            var rule = new SlidingWindowMassDeletionRule();
+            DetectionEvent? result = null;
+            for (int i = 0; i < 300; i++)
+                rule.Evaluate(Delete(31003, $@"C:\Users\a\AppData\Local\Temp\t{i}.tmp"));
+            for (int i = 0; i < 100 && result == null; i++)
+                result = rule.Evaluate(Delete(31003, $@"D:\Photos\img{i}.jpg"));
+            Assert.NotNull(result);
+            Assert.Equal(DetectionTier.Tier1Behavioral, result!.Tier);
+        }
+
+        [Theory]
+        [InlineData(@"C:\Users\a\AppData\Local\Temp\..\..\Documents\x.docx", false)]
+        [InlineData(@"C:\Users\a\Documents\Temp\x.docx", false)]
+        [InlineData(@"C:\Users\a\AppData\Local\TempData\x.docx", false)]
+        [InlineData(@"C:\Users\a\AppData\Local\Temp\x.docx", true)]
+        public void TempScratchPath_IsExact(string path, bool expected)
+            => Assert.Equal(expected, SlidingWindowMassDeletionRule.IsTempScratchPath(path));
+
         //  Self-protection and the Tier2 log-only contract 
 
         [Theory]

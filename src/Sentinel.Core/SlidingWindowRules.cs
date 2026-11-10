@@ -161,6 +161,20 @@ namespace Sentinel.Core
     {
         public string Name => "SlidingWindowMassDeletionRule";
 
+        /// <summary>
+        /// 3.7.1: true for paths inside a per-user (<c>\AppData\Local\Temp\</c>) or system
+        /// (<c>\Windows\Temp\</c>) temp directory, in DOS or NT device form. Paths containing
+        /// traversal segments never qualify.
+        /// </summary>
+        internal static bool IsTempScratchPath(string? path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            var p = path!.Replace('/', '\\');
+            if (p.IndexOf(@"\..\", StringComparison.Ordinal) >= 0 || p.EndsWith(@"\..", StringComparison.Ordinal)) return false;
+            return p.IndexOf(@"\AppData\Local\Temp\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   p.IndexOf(@"\Windows\Temp\", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         private const int DeletionThreshold = 100;
         private static readonly TimeSpan Window  = TimeSpan.FromSeconds(10);
         private static readonly TimeSpan IdleTtl = TimeSpan.FromMinutes(5);
@@ -174,6 +188,13 @@ namespace Sentinel.Core
             if (context.TriggeringEvent is not FileActivityTelemetry ft)
                 return null;
             if (ft.OperationType != "DELETE") return null;
+            // 3.7.1: deleting scratch files under a Temp directory is not destructive to user data,
+            // so it does not count toward the wiper threshold. Test runners, compilers and installers
+            // clean up hundreds of temp files in seconds; counting them killed `dotnet test` and its
+            // parent shells. The decision is on the deleted object's location, never on the process
+            // name or image, so a renamed tool gains nothing, and a wiper that sticks to Temp does
+            // no harm. Deletions of user data elsewhere still count exactly as before.
+            if (IsTempScratchPath(ft.FilePath)) return null;
 
             var now      = DateTime.UtcNow;
             var activity = _activity.GetOrAdd(ft.ProcessId, _ => new PidDeletionActivity());

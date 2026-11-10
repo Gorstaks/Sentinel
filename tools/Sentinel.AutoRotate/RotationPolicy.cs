@@ -29,6 +29,16 @@ internal sealed class RotatorState
 
     /// <summary>ISO-8601 UTC instant when the last boot reset succeeded. Starts the rotation timer.</summary>
     [DataMember] public string ResetUtc { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 3.7.1: true when install lowered the local minimum password length so a blank password is
+    /// accepted. Sentinel's default security template no longer weakens password policy for every
+    /// machine; only an opted-in AutoRotate install does, and uninstall puts the original back.
+    /// </summary>
+    [DataMember] public bool PolicyAdjusted { get; set; }
+
+    /// <summary>The minimum password length in effect before install lowered it.</summary>
+    [DataMember] public uint OriginalMinPasswordLength { get; set; }
 }
 
 internal enum RotationAction

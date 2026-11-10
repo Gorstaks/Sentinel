@@ -242,6 +242,73 @@ internal static class Rotator
         }
     }
 
+    /// <summary>Effective local minimum password length.</summary>
+    public static uint ReadMinPasswordLength()
+    {
+        IntPtr buffer;
+        uint rc = NativeMethods.NetUserModalsGet(null, 0, out buffer);
+        if (rc != NativeMethods.NERR_Success)
+            throw new InvalidOperationException("Could not read the local password policy (NetUserModalsGet error " + rc + ").");
+        try
+        {
+            return Marshal.PtrToStructure<NativeMethods.USER_MODALS_INFO_0>(buffer).usrmod0_min_passwd_len;
+        }
+        finally
+        {
+            NativeMethods.NetApiBufferFree(buffer);
+        }
+    }
+
+    public static void WriteMinPasswordLength(uint length)
+    {
+        var info = new NativeMethods.USER_MODALS_INFO_1001 { usrmod1001_min_passwd_len = length };
+        uint parameterError;
+        uint rc = NativeMethods.NetUserModalsSet(null, 1001, ref info, out parameterError);
+        if (rc != NativeMethods.NERR_Success)
+            throw new InvalidOperationException("Could not change the local minimum password length (NetUserModalsSet error " + rc + ", parameter " + parameterError + ").");
+    }
+
+    /// <summary>
+    /// 3.7.1: lower the local minimum password length to 0 for this opted-in install only, recording
+    /// the original so uninstall can restore it. Domain or Group Policy can re-apply its own value;
+    /// the boot reset then fails closed and is logged, as before.
+    /// </summary>
+    private static void AllowBlankPassword(RotatorState state)
+    {
+        uint current = ReadMinPasswordLength();
+        if (current == 0) return;
+        WriteMinPasswordLength(0);
+        state.PolicyAdjusted = true;
+        state.OriginalMinPasswordLength = current;
+        SaveState(state);
+        Log("Lowered the local minimum password length from " + current + " to 0 for SentinelAutoRotate; uninstall restores it.");
+    }
+
+    /// <summary>Restore the recorded minimum length, unless an administrator has changed it since.</summary>
+    private static void RestorePasswordPolicy(RotatorState state)
+    {
+        if (!state.PolicyAdjusted) return;
+        try
+        {
+            uint current = ReadMinPasswordLength();
+            if (current == 0)
+            {
+                WriteMinPasswordLength(state.OriginalMinPasswordLength);
+                Log("Restored the local minimum password length to " + state.OriginalMinPasswordLength + ".");
+            }
+            else
+            {
+                Log("Minimum password length was changed to " + current + " since install; left as is.");
+            }
+            state.PolicyAdjusted = false;
+            SaveState(state);
+        }
+        catch (InvalidOperationException ex)
+        {
+            Log("Could not restore the local minimum password length: " + ex.Message);
+        }
+    }
+
     // ---- password writes (administrative set; no old password is known) --------------
 
     private static void SetPassword(string account, string password)
@@ -380,8 +447,6 @@ internal static class Rotator
         }
 
         RequireLocalEnabledAccount(account);
-        if (!skipPolicyCheck)
-            RequireBlankPolicy();
         EnsureStateDirectory();
 
         // Clear any earlier installation first (idempotent reinstall, or migration from an older release).
@@ -394,6 +459,11 @@ internal static class Rotator
 
         try
         {
+            // 3.7.1: the blank-password allowance is applied here, for the opted-in install only.
+            AllowBlankPassword(state);
+            if (!skipPolicyCheck)
+                RequireBlankPolicy();
+
             // The first blank reset also verifies that the password policy accepts an empty password.
             if (BootReset() != 0) throw new InvalidOperationException("The blank password reset failed; see events.log.");
 
@@ -413,6 +483,7 @@ internal static class Rotator
             failed.Installed = false;
             failed.RotationEnabled = false;
             SaveState(failed);
+            RestorePasswordPolicy(failed);
             return 1;
         }
 
@@ -430,6 +501,7 @@ internal static class Rotator
         {
             Scheduler.DeleteAll();
             RemoveLegacyAutologon(state?.Account, legacy);
+            if (state != null) RestorePasswordPolicy(state);
             Log("Uninstall: no active installation.");
             return 0;
         }
@@ -466,6 +538,9 @@ internal static class Rotator
 
         RemoveLegacyAutologon(state.Account, legacy);
         Scheduler.DeleteAll();
+        // The blank password set above stays valid; the restored minimum applies to later changes.
+        RotatorState finalState = LoadState() ?? state;
+        RestorePasswordPolicy(finalState);
         Log("Uninstalled. The account password is blank.");
         return 0;
     }

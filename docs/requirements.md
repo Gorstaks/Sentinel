@@ -16,7 +16,9 @@ Primary audience: a standalone home/gaming PC owner, including a potentially tar
 - Name/path heuristics (installer, DirectX/redist, ancestry-root names) demote a detection only with a non-attacker-controlled anchor: the real Windows system directory, a Program Files image, or a valid signature. "Microsoft-signed" means an exact known Microsoft common name, not a substring. Signature-cache entries are keyed on size, timestamps and a content fingerprint.
 - Cast-device firewall blocks share the MitM posture gate and never target the gateway, DNS/DHCP servers, multicast or link-local addresses.
 - Self-protection additionally hashes every `Sentinel*` binary next to the service and checks that the registered service `ImagePath` names the running executable. ETW session enumeration uses the native `EVENT_TRACE_PROPERTIES` layout. `NtTraceEvent` prologue changes are reported. All three are Tier2 / LogOnly.
-- `LGPO.exe` runs only when it has a valid Microsoft Corporation signature. Release CI pins third-party actions to commit SHAs, pins Inno Setup and checks its signature, requires signing when a signing secret is configured, flags unsigned installers in the release notes, and accepts a manual publish only from main/master.
+- `LGPO.exe` runs only when it has a valid Microsoft Corporation signature.
+- The shipped security template must not weaken password policy (minimum length, complexity, history) or force FIPS off. Only an opted-in SentinelAutoRotate install may lower the local minimum password length to 0, and it must restore the recorded original on uninstall or failed install.
+- `SlidingWindowMassDeletionRule` must not count deletions inside `\AppData\Local\Temp\` or `\Windows\Temp\` toward its threshold. The exclusion is keyed on the deleted object's location, never on the deleting process's name or image. Release CI pins third-party actions to commit SHAs, pins Inno Setup and checks its signature, requires signing when a signing secret is configured, flags unsigned installers in the release notes, and accepts a manual publish only from main/master.
 
 ### Integrated NanoAV coverage (3.4.5)
 
