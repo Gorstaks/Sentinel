@@ -38,7 +38,7 @@ namespace Sentinel.Core
             security.SetAccessRuleProtection(true, false);
             foreach (FileSystemAccessRule rule in security.GetAccessRules(true, false, typeof(SecurityIdentifier)))
                 security.RemoveAccessRuleAll(rule);
-            const InheritanceFlags both = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+            var both = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
             security.AddAccessRule(new FileSystemAccessRule(system, FileSystemRights.FullControl, both, PropagationFlags.None, AccessControlType.Allow));
             security.AddAccessRule(new FileSystemAccessRule(admins, FileSystemRights.FullControl, both, PropagationFlags.None, AccessControlType.Allow));
             if (interactiveReadExecute)

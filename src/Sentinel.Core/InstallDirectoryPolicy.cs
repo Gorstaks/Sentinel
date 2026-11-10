@@ -14,7 +14,9 @@ namespace Sentinel.Core
     /// </summary>
     public static class InstallDirectoryPolicy
     {
-        private const FileSystemRights WriteLike =
+        // static readonly, not const: an enum constant of this type-forwarded framework type sends
+        // coverlet's Mono.Cecil instrumenter into an infinite type-forward resolution (CI stack overflow).
+        private static readonly FileSystemRights WriteLike =
             FileSystemRights.WriteData | FileSystemRights.AppendData | FileSystemRights.CreateFiles |
             FileSystemRights.CreateDirectories | FileSystemRights.WriteAttributes | FileSystemRights.WriteExtendedAttributes |
             FileSystemRights.Delete | FileSystemRights.DeleteSubdirectoriesAndFiles |

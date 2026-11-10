@@ -62,6 +62,7 @@ Red/blue audit remediation. A source-aware review looked for paths where an atta
 - Release signing is required whenever a signing secret is configured. An unsigned installer is called out in the release notes.
 - A manual `workflow_dispatch` publish is accepted only from main/master.
 ### Tests
+- CI coverage note: an enum-typed `const` of a type-forwarded framework type (`FileSystemRights`) sent coverlet's Mono.Cecil instrumenter into a stack overflow before any test ran. It is `static readonly` instead (reproduced locally with and without the change).
 - New `V371AuditRemediationTests` (dashboard guard, install/ACL policy, registry allowlist, ancestor refusal, anchored noise, exact Microsoft signer, fingerprint, hard-link refusal, cast address guard, ETW layout and patch comparison, service ImagePath match, Tier2/LogOnly contract for every new observation).
 - `AdvancedResponseEngineTests` now covers refusal of an off-allowlist key and of a value that changed since it was observed. Removal is exercised on a real HKCU Run fixture value.
 
