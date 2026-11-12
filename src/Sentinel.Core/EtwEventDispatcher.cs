@@ -32,6 +32,7 @@ namespace Sentinel.Core
         private readonly ILogger<EtwEventDispatcher> _logger;
         private readonly CredentialReadTracker _credentialReads = new();
         private readonly Dictionary<int, DateTime> _registryHintTimes = new();
+        private readonly int SelfPid = System.Net48Environment.ProcessId;
 
         // Event IDs for Microsoft-Windows-Kernel-Process
         private const ushort ProcessStart = 1;
@@ -156,7 +157,11 @@ namespace Sentinel.Core
             if (evt.UserData == IntPtr.Zero || evt.UserDataLength < IntPtr.Size + 4) return;
             ulong imageBase = (ulong)Marshal.ReadIntPtr(evt.UserData, 0);
             uint imageSize = unchecked((uint)Marshal.ReadInt32(evt.UserData, IntPtr.Size));
-            if (imageBase != 0)
+            // The service's own address ranges are never a threat-intel attribution target and it loads
+            // modules continuously (JIT, resources, signature checks), so don't track them here. Ranges are
+            // still enumerated on demand. The image load itself still goes to DllUnloadEngine below, so
+            // a module injected into Sentinel stays visible.
+            if (imageBase != 0 && pid != SelfPid)
                 MappedModuleCache.Add(pid, imageBase, imageSize);
 
             int nameOff = IntPtr.Size == 8 ? 32 : 20;

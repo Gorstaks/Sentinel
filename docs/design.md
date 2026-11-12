@@ -445,7 +445,7 @@ Organized by MonitorGroup. Each group has staggered startup, independent failure
 | `SecureCacheStore` | DPAPI machine-scope encryption + HMAC integrity for persisted cache files. |
 | `HashReputationService` | Service-only bounded online SHA256 context with Unknown fallback; no runtime trust or reporting. |
 | `QuarantineManager` | DPAPI machine-scope quarantine under `%ProgramData%\Sentinel\Quarantine`. Production path: SYSTEM+Admins FullControl (inherit) + Interactive this-folder-only List/Traverse (UAC-safe Explorer). Sample blobs stay unreadable to Users. Max 128 MB/file. Restore path-validated (no OS-critical write). Agent never creates the folder. |
-| `SignerTrustService` | Centralized Authenticode verification (WinVerifyTrust + catalog fallback). Trusted publisher cache. |
+| `SignerTrustService` | Centralized Authenticode verification (WinVerifyTrust + catalog fallback). Per-path verdict cache keyed on a size/timestamp/head-tail-hash fingerprint, bounded at 20,000 entries (evicted paths are re-verified). |
 | `AllowlistService` | User/dev/gaming/publisher allowlists. President's Law rules never suppressed. |
 | `SecurityValidation` | Input validation, Authenticode (embedded + catalog), process image path, OS-critical paths, private IP classification, constant-time `SecureCompare`. |
 | `SentinelMetrics` | Performance counters with histograms (P50/P90/P95/P99) for detection and response. |

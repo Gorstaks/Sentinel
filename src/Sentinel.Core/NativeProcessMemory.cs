@@ -305,8 +305,25 @@ namespace Sentinel.Core
             if (imageBase == 0) return;
             var list = Ranges.GetOrAdd(pid, _ => new List<(ulong, ulong)>());
             lock (list)
+            {
+                // Dedupe on base address: the same image reloaded at the same base is one range.
+                for (int i = 0; i < list.Count; i++)
+                    if (list[i].Base == imageBase)
+                    {
+                        list[i] = (imageBase, imageBase + Math.Max(imageSize, 1UL));
+                        return;
+                    }
+
+                // Per-PID cap. Long-lived hosts that load/unload modules (no unload handling here)
+                // otherwise grew this list without bound. Drop the oldest ranges.
+                if (list.Count >= MaxRangesPerPid)
+                    list.RemoveRange(0, MaxRangesPerPid / 4);
+
                 list.Add((imageBase, imageBase + Math.Max(imageSize, 1UL)));
+            }
         }
+
+        private const int MaxRangesPerPid = 4096;
 
         public static List<(ulong Base, ulong End)> Get(int pid)
         {

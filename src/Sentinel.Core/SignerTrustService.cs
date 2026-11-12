@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Security.Cryptography.X509Certificates;
@@ -88,7 +88,7 @@ namespace Sentinel.Core
             var (isSigned, signer) = VerifyAndExtractSigner(filePath);
             string writeTime = "";
             try { writeTime = FileFingerprint(filePath); } catch { }
-            _cache[filePath] = (isSigned, signer, writeTime);
+            Store(filePath, isSigned, signer, writeTime);
             return isSigned;
         }
 
@@ -120,7 +120,7 @@ namespace Sentinel.Core
             var (isSigned, signer) = VerifyAndExtractSigner(filePath);
             string writeTime = "";
             try { writeTime = FileFingerprint(filePath); } catch { }
-            _cache[filePath] = (isSigned, signer, writeTime);
+            Store(filePath, isSigned, signer, writeTime);
             return isSigned ? signer : null;
         }
 
@@ -265,11 +265,35 @@ namespace Sentinel.Core
             catch (IOException) { return ""; }
             catch (UnauthorizedAccessException) { return ""; }
         }
+        /// <summary>
+        /// Upper bound on cached verdicts. Every distinct path ever queried used to stay for the life of the
+        /// service (temp, installer and randomly named binaries included), growing without limit. Evicted
+        /// entries are simply re-verified on next use, so correctness is unchanged.
+        /// </summary>
+        internal const int MaxCacheEntries = 20000;
+
+        private void Store(string filePath, bool isSigned, string signer, string fingerprint)
+        {
+            _cache[filePath] = (isSigned, signer, fingerprint);
+            if (_cache.Count <= MaxCacheEntries) return;
+
+            // Evict a quarter of the entries (enumeration order is arbitrary, which is fine for a verdict cache).
+            int toRemove = MaxCacheEntries / 4;
+            foreach (var key in _cache.Keys)
+            {
+                if (toRemove-- <= 0) break;
+                if (string.Equals(key, filePath, StringComparison.OrdinalIgnoreCase)) continue;
+                _cache.TryRemove(key, out _);
+            }
+        }
+
+        internal int CacheCount => _cache.Count;
+
         public void AddTestOverride(string filePath, bool isSigned, string signer)
         {
             string writeTime = "";
             try { writeTime = FileFingerprint(filePath); } catch { }
-            _cache[filePath] = (isSigned, signer, writeTime);
+            Store(filePath, isSigned, signer, writeTime);
         }
 
         /// <summary>

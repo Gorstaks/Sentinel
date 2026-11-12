@@ -158,6 +158,10 @@ namespace Sentinel.Core
                 bool firstSight;
                 lock (cache.Paths)
                 {
+                    // Bound the per-PID set: a busy long-lived host is refreshed on every load, so idle
+                    // eviction never reaches it. Reset when oversized (worst case: re-evaluation of a module).
+                    if (cache.Paths.Count >= MaxPathsPerPid)
+                        cache.Paths.Clear();
                     firstSight = cache.Paths.Add(modulePath!);
                     // During the startup window, record the module as part of the process's
                     // expected/normal set. These are never treated as late-load anomalies.
@@ -826,6 +830,8 @@ namespace Sentinel.Core
                 if (kv.Value < cutoff) _remediationHistory.TryRemove(kv.Key, out _);
             _pidModules.Clear();
         }
+
+        private const int MaxPathsPerPid = 8192;
 
         private sealed class PidModuleCache
         {

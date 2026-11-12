@@ -1,5 +1,20 @@
 # Changelog
 
+## [3.7.3] - 2026-11-12
+### Fixed
+- **Service memory growth (8+ GB after ~32 h).** Three per-event caches had no upper bound:
+  - `SignerTrustService` kept a verdict for every distinct path ever queried (`PruneCache` had no caller). It is now capped at 20,000 entries; evicted paths are simply re-verified.
+  - `MappedModuleCache` appended an image range for every ETW image-load, with no dedupe or cap, until the process exited. It now dedupes on base address and caps at 4,096 ranges per PID.
+  - `DllUnloadEngine` per-PID module path sets were never evicted for busy long-lived hosts (idle eviction is defeated by activity). They are now capped at 8,192 paths per PID.
+- The service no longer records its own image-load ranges in `MappedModuleCache`. Its loads still reach `DllUnloadEngine`, so a module injected into Sentinel stays visible. File and registry telemetry from the service's own PID was already dropped in `TelemetryFusionEngine`.
+- Diagnosis is from code analysis; no heap dump was taken. Confirm with `[SentinelHealthCheck] High memory usage` after a day of uptime.
+### Constraints honored
+- Userland only. No detection, tier or response behavior changed; an evicted cache entry is re-verified or re-evaluated on next use (fail closed).
+- Self image loads still reach `DllUnloadEngine`, so the self-exclusion grants no trust an attacker could use.
+### Testing
+- `Sentinel.Core` builds 0 warnings / 0 errors with `-warnaserror`. Full suite: 3,698 passed, 9 skipped, 1 failed.
+- The failure, `EndpointProtectionWindowsTests.CorrelatedVictimResponseVerifiesRealExitAndPreservesUnrelatedProcess`, is pre-existing: it fails identically on the unmodified 3.7.2 commit and passes in isolation (3/3), so it is order-dependent on state left by another test in the run.
+
 ## [3.7.2] - 2026-11-10
 ### Fixed
 - **Dashboard showed "Coverage status: Unavailable - Sensor collection health unavailable".** The 3.7.1 pipe-server identity check (`PipeServerIdentity`) used `ProcessIdToSessionId` on the service's process ID. That call needs a handle to the SYSTEM service process, which a standard or non-elevated user is denied. The check therefore failed, and the Agent refused to send every IPC request, including `health`. The server session is now read from the pipe handle with `GetNamedPipeServerSessionId`, which needs no access to the server process. The protection is unchanged: the server must be in session 0, where a standard user cannot start a process. If its image is readable, it must be the installed `Sentinel.Service.exe`.
