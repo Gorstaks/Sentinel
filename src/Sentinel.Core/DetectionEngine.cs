@@ -43,6 +43,8 @@ namespace Sentinel.Core
         private readonly ILogger<DetectionEngine> _logger;
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _processingTask;
+        private readonly BoundedAsyncWork _reputationWork;
+        private long _reputationDropped;
         private long _lastProcessedUtcTicks;
         private SentinelOrchestrator? _orchestrator;
 
@@ -81,6 +83,7 @@ namespace Sentinel.Core
             _weightedCorrelation = weightedCorrelation;
             _scoringEngine = scoringEngine;
             _logger = logger;
+            _reputationWork = new BoundedAsyncWork(2, logger);
 
             // Wire up correlation engines (hand-authored composites + v2.0 weighted)
             _correlationEngine.Initialize(this.EmitCompositeAsync);
@@ -294,7 +297,7 @@ namespace Sentinel.Core
                                 // Previously, accessing _cts.Token after Stop() caused unhandled
                                 // exceptions that crashed the service - an attacker could exploit
                                 // this by triggering rapid stop/start cycles to keep Sentinel down.
-                                _ = Task.Run(async () =>
+                                if (!_reputationWork.TryRun(async () =>
                                 {
                                     try
                                     {
@@ -443,7 +446,12 @@ namespace Sentinel.Core
                                     {
                                         _logger.LogError(ex, "[DetectionEngine] Error checking process reputation for {ProcessName} (PID {ProcessId})", pt.ProcessName, pt.ProcessId);
                                     }
-                                }, ct);
+
+                                }))
+                                {
+                                    Interlocked.Increment(ref _reputationDropped);
+                                    _logger.LogDebug("Reputation admission full; local analysis skipped ({Dropped} total)", Interlocked.Read(ref _reputationDropped));
+                                }
                             }
 
                             foreach (var rule in _rules)
@@ -597,6 +605,7 @@ namespace Sentinel.Core
             try
             {
                 _processingTask?.Wait(2000);
+                _reputationWork.CompleteAsync().Wait(2000);
             }
             catch { }
         }

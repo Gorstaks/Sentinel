@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Collections.Generic;
 
 namespace Sentinel.Core
@@ -31,16 +32,30 @@ namespace Sentinel.Core
         /// </summary>
         public static bool IsProtectedGameProcess(int pid, string? imagePath = null)
         {
-            return SecurityValidation.IsGameOrAntiCheatProcess(pid, imagePath);
+            return IsProtectedGamePath(imagePath ?? SecurityValidation.GetProcessImagePath(pid));
         }
 
         /// <summary>
-        /// Path-only check (when PID is unavailable or already exited).
-        /// Returns true if the binary resides in a known game installation directory.
+        /// Response immunity requires a signed game in a canonical, ACL-protected installation.
+        /// Writable/per-user game paths retain memory-inspection compatibility only.
         /// </summary>
         public static bool IsProtectedGamePath(string? path)
         {
-            return SecurityValidation.IsGameOrAntiCheatPath(path);
+            if (!SecurityValidation.IsGameOrAntiCheatPath(path) || ModuleIdentity.IsUserWritableDrop(path)) return false;
+            path = SelfPathGuard.TryGetFinalPath(path!);
+            if (string.IsNullOrEmpty(path) || ModuleIdentity.IsUserWritableDrop(path)) return false;
+            var root = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            var root86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            return (SecurityValidation.IsPathWithinDirectory(path, root) ||
+                    SecurityValidation.IsPathWithinDirectory(path, root86)) &&
+                   InstallDirectoryPolicy.Evaluate(Path.GetDirectoryName(path!)).Ok &&
+                   HasProtectedFileAcl(path!) && SecurityValidation.VerifyAuthenticodeSignature(path!);
+        }
+
+        private static bool HasProtectedFileAcl(string path)
+        {
+            try { return InstallDirectoryPolicy.EvaluateSecurity(path, File.GetAccessControl(path), true).Ok; }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("Game identity ACL unavailable: " + ex.Message); return false; }
         }
 
         /// <summary>

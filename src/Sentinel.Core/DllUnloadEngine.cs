@@ -702,7 +702,7 @@ namespace Sentinel.Core
                         if (proc.Id <= 4) continue;
                         var path = SecurityValidation.GetProcessImagePath(proc.Id);
                         if (string.IsNullOrEmpty(path)) continue;
-                        if (SecurityValidation.IsGameOrAntiCheatPath(path)) continue;
+                        if (AlwaysOnPolicies.IsProtectedGamePath(path)) continue;
                         var pDir = Path.GetDirectoryName(path);
                         if (string.IsNullOrEmpty(pDir)) continue;
                         if (!pDir.TrimEnd('\\').Equals(directory.TrimEnd('\\')))

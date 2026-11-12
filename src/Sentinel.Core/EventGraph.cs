@@ -34,6 +34,15 @@ namespace Sentinel.Core
         private const int HardCapFiles = 10000;
         private const int HardCapEndpoints = 3000;
 
+        public void ResetProcess(int pid)
+        {
+            var prefix = $"PID_{pid}_";
+            foreach (var key in _processEdges.Keys)
+                if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) _processEdges.TryRemove(key, out _);
+            foreach (var key in _nodes.Keys)
+                if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) _nodes.TryRemove(key, out _);
+        }
+
         public void AddNode(string key, string type, Dictionary<string, string>? properties = null)
         {
             var node = _nodes.GetOrAdd(key, k => new GraphNode { Key = k, Type = type });
@@ -111,6 +120,7 @@ namespace Sentinel.Core
 
                 foreach (var e in edges)
                 {
+                    if (e.Timestamp < DateTime.UtcNow - TimeSpan.FromMinutes(2)) continue;
                     edgeCount++;
                     relations.Add(e.Relation ?? "");
                     if (string.Equals(e.Relation, "CONNECTED", StringComparison.OrdinalIgnoreCase))
@@ -145,6 +155,9 @@ namespace Sentinel.Core
                     _nodes.TryRemove(key, out _);
                     _processEdges.TryRemove(key, out _);
                 }
+
+                foreach (var edges in _processEdges.Values)
+                    lock (edges) edges.RemoveAll(e => e.Timestamp < cutoff);
 
                 // 2. Enforce hard caps
                 EnforceHardCaps("PROCESS", HardCapProcesses);

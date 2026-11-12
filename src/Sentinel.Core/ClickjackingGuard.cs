@@ -264,7 +264,7 @@ namespace Sentinel.Core
 
             if (UserlandProtocolHeuristics.IsKnownCommsIdentity(n, imagePath))
                 return true;
-            if (SecurityValidation.IsGameOrAntiCheatPath(imagePath))
+            if (AlwaysOnPolicies.IsProtectedGamePath(imagePath))
                 return true;
             if (ChainTracer.IsLegitimateIdeHost(imagePath, n))
                 return true;

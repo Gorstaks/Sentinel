@@ -64,15 +64,31 @@ namespace Sentinel.Core
         /// </summary>
         public bool IsSignedFile(string filePath)
         {
-            if (string.IsNullOrEmpty(filePath)) return false;
+            if (filePath == null || filePath.Length == 0) return false;
+            if (_cache.TryGetValue(filePath, out var test) && test.Fingerprint.StartsWith("test:", StringComparison.Ordinal))
+                return test.IsSigned;
+            try
+            {
+                // Deny writers/renames while hashing and verifying this path on Windows.
+                using var lease = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                return IsSignedFileCore(filePath);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            { _logger.LogDebug(ex, "Signature identity unavailable for {Path}", filePath); return false; }
+        }
+
+        private bool IsSignedFileCore(string filePath)
+        {
+            if (filePath == null || filePath.Length == 0) return false;
 
             if (_cache.TryGetValue(filePath, out var cached))
             {
+                if (cached.Fingerprint.StartsWith("test:", StringComparison.Ordinal)) return cached.IsSigned;
                 // HARDENING v1.3.0: Invalidate cache if file was modified since caching
                 try
                 {
                     var currentWrite = FileFingerprint(filePath);
-                    if (!string.Equals(currentWrite, cached.Fingerprint, StringComparison.Ordinal))
+                    if (string.IsNullOrEmpty(currentWrite) || !string.Equals(currentWrite, cached.Fingerprint, StringComparison.Ordinal))
                     {
                         _cache.TryRemove(filePath, out _);
                         // Fall through to re-verify
@@ -82,12 +98,14 @@ namespace Sentinel.Core
                         return cached.IsSigned;
                     }
                 }
-                catch { return cached.IsSigned; }
+                catch { return false; }
             }
 
+            var before = FileFingerprint(filePath);
             var (isSigned, signer) = VerifyAndExtractSigner(filePath);
-            string writeTime = "";
-            try { writeTime = FileFingerprint(filePath); } catch { }
+            var writeTime = FileFingerprint(filePath);
+            if (string.IsNullOrEmpty(before) || !string.Equals(before, writeTime, StringComparison.Ordinal))
+            { isSigned = false; signer = string.Empty; }
             Store(filePath, isSigned, signer, writeTime);
             return isSigned;
         }
@@ -98,14 +116,30 @@ namespace Sentinel.Core
         /// </summary>
         public string? GetSignerName(string filePath)
         {
-            if (string.IsNullOrEmpty(filePath)) return null;
+            if (filePath == null || filePath.Length == 0) return null;
+            if (_cache.TryGetValue(filePath, out var test) && test.Fingerprint.StartsWith("test:", StringComparison.Ordinal))
+                return test.IsSigned ? test.Signer : null;
+            try
+            {
+                // Deny writers/renames while hashing and verifying this path on Windows.
+                using var lease = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                return GetSignerNameCore(filePath);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            { _logger.LogDebug(ex, "Signature identity unavailable for {Path}", filePath); return null; }
+        }
+
+        private string? GetSignerNameCore(string filePath)
+        {
+            if (filePath == null || filePath.Length == 0) return null;
 
             if (_cache.TryGetValue(filePath, out var cached))
             {
+                if (cached.Fingerprint.StartsWith("test:", StringComparison.Ordinal)) return cached.IsSigned ? cached.Signer : null;
                 try
                 {
                     var currentWrite = FileFingerprint(filePath);
-                    if (!string.Equals(currentWrite, cached.Fingerprint, StringComparison.Ordinal))
+                    if (string.IsNullOrEmpty(currentWrite) || !string.Equals(currentWrite, cached.Fingerprint, StringComparison.Ordinal))
                     {
                         _cache.TryRemove(filePath, out _);
                     }
@@ -114,12 +148,14 @@ namespace Sentinel.Core
                         return cached.IsSigned ? cached.Signer : null;
                     }
                 }
-                catch { return cached.IsSigned ? cached.Signer : null; }
+                catch { return null; }
             }
 
+            var before = FileFingerprint(filePath);
             var (isSigned, signer) = VerifyAndExtractSigner(filePath);
-            string writeTime = "";
-            try { writeTime = FileFingerprint(filePath); } catch { }
+            var writeTime = FileFingerprint(filePath);
+            if (string.IsNullOrEmpty(before) || !string.Equals(before, writeTime, StringComparison.Ordinal))
+            { isSigned = false; signer = string.Empty; }
             Store(filePath, isSigned, signer, writeTime);
             return isSigned ? signer : null;
         }
@@ -129,7 +165,7 @@ namespace Sentinel.Core
         /// </summary>
         public bool IsMicrosoftSigned(string filePath)
         {
-            if (string.IsNullOrEmpty(filePath)) return false;
+            if (filePath == null || filePath.Length == 0) return false;
             if (!IsSignedFile(filePath)) return false;
             var signer = GetSignerName(filePath) ?? string.Empty;
             // 3.7.1: exact known Microsoft common names, not a substring of attacker-chosen publisher text.
@@ -238,8 +274,7 @@ namespace Sentinel.Core
 
         /// <summary>
         /// 3.7.1: cache key material. Last-write time alone is attacker-settable, so a replaced file whose
-        /// timestamp was reset kept its old "signed" verdict. Size, both timestamps and a hash of the first
-        /// and last 4 KiB (PE header and the signature/overlay area) must all still match.
+        /// timestamp was reset kept its old "signed" verdict. Size, both timestamps and a hash of the entire file must all still match.
         /// </summary>
         internal static string FileFingerprint(string filePath)
         {
@@ -248,19 +283,9 @@ namespace Sentinel.Core
                 var info = new FileInfo(filePath);
                 if (!info.Exists) return "";
                 using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                var head = new byte[4096];
-                int headRead = stream.Read(head, 0, head.Length);
-                var tail = new byte[4096];
-                int tailRead = 0;
-                if (stream.Length > head.Length)
-                {
-                    stream.Seek(-Math.Min(tail.Length, stream.Length), SeekOrigin.End);
-                    tailRead = stream.Read(tail, 0, tail.Length);
-                }
                 using var sha = System.Security.Cryptography.SHA256.Create();
-                sha.TransformBlock(head, 0, headRead, null, 0);
-                sha.TransformFinalBlock(tail, 0, tailRead);
-                return info.Length + "|" + info.LastWriteTimeUtc.Ticks + "|" + info.CreationTimeUtc.Ticks + "|" + Convert.ToBase64String(sha.Hash!);
+                var digest = sha.ComputeHash(stream);
+                return info.Length + "|" + info.LastWriteTimeUtc.Ticks + "|" + info.CreationTimeUtc.Ticks + "|" + Convert.ToBase64String(digest);
             }
             catch (IOException) { return ""; }
             catch (UnauthorizedAccessException) { return ""; }
@@ -293,7 +318,7 @@ namespace Sentinel.Core
         {
             string writeTime = "";
             try { writeTime = FileFingerprint(filePath); } catch { }
-            Store(filePath, isSigned, signer, writeTime);
+            Store(filePath, isSigned, signer, "test:" + writeTime);
         }
 
         /// <summary>

@@ -227,7 +227,7 @@ namespace Sentinel.Core
             // v2.3.1: Second-chance game-path check - if FindExecutable resolved the binary
             // to a known game directory, suppress detection. Covers the case where the
             // name-only check above didn't match (e.g. game-specific launcher binary).
-            if (exePath != null && SecurityValidation.IsGameOrAntiCheatPath(exePath))
+            if (exePath != null && AlwaysOnPolicies.IsProtectedGamePath(exePath))
                 return;
 
             bool isSuspiciousPath = exePath != null &&

@@ -50,6 +50,9 @@ namespace Sentinel.Core
             int dwFlags,
             ref DATA_BLOB pDataOut);
 
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr LocalFree(IntPtr memory);
+
         private const int CRYPTPROTECT_UI_FORBIDDEN = 0x1;
         // v1.6.0: Machine-scope DPAPI - service runs as SYSTEM; bind ciphertext to host.
         private const int CRYPTPROTECT_LOCAL_MACHINE = 0x4;
@@ -85,11 +88,43 @@ namespace Sentinel.Core
                 // Degrade gracefully
             }
 
-            // Generate a boot-nonce-bound HMAC key
+            // Derive a stable installation HMAC key; executable versions are not key material.
             _hmacKey = GenerateBootBoundKey(_secureDir, isDefaultPath);
+            if (isDefaultPath) MigrateLegacyCaches();
         }
 
-        private static byte[] GenerateBootBoundKey(string secureDirectory, bool protectKeyAcl)
+        internal static void PreserveLegacyExecutableHashes(string installDirectory)
+        {
+            foreach (var name in new[] { "Sentinel.Service.exe", "Sentinel.Agent.exe" })
+            {
+                var previous = Path.Combine(installDirectory, name + ".old");
+                if (!File.Exists(previous)) continue;
+                using var input = File.OpenRead(previous);
+                using var sha = SHA256.Create();
+                // An executable digest is public metadata, not a secret or an HMAC key.
+                File.WriteAllBytes(Path.Combine(installDirectory, name + ".cache-legacy-sha256"), sha.ComputeHash(input));
+            }
+        }
+
+        private void MigrateLegacyCaches()
+        {
+            try
+            {
+                foreach (var path in Directory.GetFiles(_secureDir, "*.cache"))
+                {
+                    var payload = Unprotect(File.ReadAllBytes(path));
+                    if (payload == null || payload.Length <= 32) continue;
+                    var raw = Encoding.UTF8.GetString(payload, 32, payload.Length - 32);
+                    var separator = raw.IndexOf(':');
+                    if (separator < 0) continue;
+                    // Load authenticates before it can rewrite a legacy record.
+                    _ = Load(Path.GetFileNameWithoutExtension(path), raw.Substring(0, separator));
+                }
+            }
+            catch (Exception ex) { Debug.WriteLine("Legacy cache migration deferred: " + ex.Message); }
+        }
+
+        private static byte[] GenerateBootBoundKey(string secureDirectory, bool protectKeyAcl, bool legacyExecutableBinding = false)
         {
             // SECURITY v1.4.4: Removed predictable components (boot time from PID 4, process ID).
             // Boot time is publicly readable by any standard user. Process ID is visible in task
@@ -179,22 +214,28 @@ namespace Sentinel.Core
                 // Fail-soft: older installs without secret still derive from entropy+GUID
             }
 
-            // 4. v2.0.4 HIGH-1: Process-specific entropy - SHA-256 of our own executable.
-            // Even if an attacker achieves SYSTEM, they cannot forge cache entries without
-            // also having access to the exact Sentinel binary that generated the key.
-            // This binds the HMAC key to the specific Sentinel build/version.
-            try
+            // Legacy compatibility only; new writes remain stable across product upgrades.
+            if (legacyExecutableBinding)
             {
-                var ownExe = System.Net48Environment.ProcessPath;
-                if (!string.IsNullOrEmpty(ownExe) && File.Exists(ownExe))
+                var executable = System.Net48Environment.ProcessPath;
+                if (!string.IsNullOrEmpty(executable) && File.Exists(executable))
                 {
-                    using var exeStream = new FileStream(ownExe, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                    using var sha = SHA256.Create();
-                    var exeHash = sha.ComputeHash(exeStream);
-                    ms.Write(exeHash, 0, exeHash.Length);
+                    var preserved = executable + ".cache-legacy-sha256";
+                    byte[] bytes;
+                    if (File.Exists(preserved))
+                    {
+                        bytes = File.ReadAllBytes(preserved);
+                        if (bytes.Length != 32) throw new InvalidDataException("Invalid legacy executable digest");
+                    }
+                    else
+                    {
+                        using var stream = File.OpenRead(executable);
+                        using var hash = SHA256.Create();
+                        bytes = hash.ComputeHash(stream);
+                    }
+                    ms.Write(bytes, 0, bytes.Length);
                 }
             }
-            catch { }
 
             // 5. Domain-specific label to derive a unique key for cache HMAC
             // (prevents reuse of this key material for other purposes)
@@ -242,7 +283,7 @@ namespace Sentinel.Core
             finally
             {
                 if (blobIn.pbData != IntPtr.Zero) Marshal.FreeHGlobal(blobIn.pbData);
-                if (blobOut.pbData != IntPtr.Zero) Marshal.FreeHGlobal(blobOut.pbData);
+                if (blobOut.pbData != IntPtr.Zero) LocalFree(blobOut.pbData);
             }
         }
 
@@ -268,8 +309,24 @@ namespace Sentinel.Core
             finally
             {
                 if (blobIn.pbData != IntPtr.Zero) Marshal.FreeHGlobal(blobIn.pbData);
-                if (blobOut.pbData != IntPtr.Zero) Marshal.FreeHGlobal(blobOut.pbData);
+                if (blobOut.pbData != IntPtr.Zero) LocalFree(blobOut.pbData);
             }
+        }
+
+        private bool HasValidIntegrity(string path)
+        {
+            try
+            {
+                var payload = Unprotect(File.ReadAllBytes(path));
+                if (payload == null || payload.Length <= 32) return false;
+                var expected = new byte[32];
+                Buffer.BlockCopy(payload, 0, expected, 0, 32);
+                using var current = new HMACSHA256(_hmacKey);
+                if (SecurityValidation.SecureCompare(expected, current.ComputeHash(payload, 32, payload.Length - 32))) return true;
+                using var legacy = new HMACSHA256(GenerateBootBoundKey(_secureDir, false, true));
+                return SecurityValidation.SecureCompare(expected, legacy.ComputeHash(payload, 32, payload.Length - 32));
+            }
+            catch (Exception ex) { Debug.WriteLine("Cache integrity check failed: " + ex.Message); return false; }
         }
 
         public void Save(string cacheName, string key, string value)
@@ -277,6 +334,8 @@ namespace Sentinel.Core
             try
             {
                 var cacheFilePath = Path.Combine(_secureDir, $"{cacheName}.cache");
+                if (File.Exists(cacheFilePath) && !HasValidIntegrity(cacheFilePath))
+                    File.Copy(cacheFilePath, cacheFilePath + ".incompatible-" + Guid.NewGuid().ToString("N"));
                 var rawData = $"{key}:{value}";
                 var rawBytes = Encoding.UTF8.GetBytes(rawData);
 
@@ -326,11 +385,15 @@ namespace Sentinel.Core
                     computedHash = hmac.ComputeHash(rawBytes);
                 }
 
-                if (!SecurityValidation.SecureCompare(hmacHash, computedHash))
+                bool legacyCache = !SecurityValidation.SecureCompare(hmacHash, computedHash);
+                if (legacyCache)
                 {
-                    // Tampered or old boot session cache file
-                    File.Delete(cacheFilePath);
-                    return null;
+                    using var legacy = new HMACSHA256(GenerateBootBoundKey(_secureDir, false, true));
+                    if (!SecurityValidation.SecureCompare(hmacHash, legacy.ComputeHash(rawBytes)))
+                    {
+                        Debug.WriteLine("SecureCacheStore: incompatible cache retained for recovery: " + cacheName);
+                        return null;
+                    }
                 }
 
                 var rawData = Encoding.UTF8.GetString(rawBytes);
@@ -342,6 +405,7 @@ namespace Sentinel.Core
 
                 if (loadedKey == key)
                 {
+                    if (legacyCache) Save(cacheName, key, loadedValue);
                     return loadedValue;
                 }
             }
@@ -380,7 +444,7 @@ namespace Sentinel.Core
                 Marshal.FreeHGlobal(dataIn.pbData);
                 if (dataOut.pbData != IntPtr.Zero)
                 {
-                    Marshal.FreeHGlobal(dataOut.pbData);
+                    LocalFree(dataOut.pbData);
                 }
             }
         }
@@ -409,7 +473,7 @@ namespace Sentinel.Core
                 }
                 if (dataOut.pbData != IntPtr.Zero)
                 {
-                    Marshal.FreeHGlobal(dataOut.pbData);
+                    LocalFree(dataOut.pbData);
                     dataOut.pbData = IntPtr.Zero;
                 }
                 // Legacy fallback (pre-1.6.0 user-scope blobs)
@@ -426,7 +490,7 @@ namespace Sentinel.Core
                 Marshal.FreeHGlobal(dataIn.pbData);
                 if (dataOut.pbData != IntPtr.Zero)
                 {
-                    Marshal.FreeHGlobal(dataOut.pbData);
+                    LocalFree(dataOut.pbData);
                 }
             }
         }

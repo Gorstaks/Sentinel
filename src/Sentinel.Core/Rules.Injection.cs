@@ -46,7 +46,7 @@ namespace Sentinel.Core
                 return null;
 
             var imagePath = SecurityValidation.GetProcessImagePath(tit.ProcessId);
-            if (SecurityValidation.IsGameOrAntiCheatPath(imagePath))
+            if (AlwaysOnPolicies.IsProtectedGamePath(imagePath))
                 return null;
 
             _queueCandidate(tit.ProcessId, false);
