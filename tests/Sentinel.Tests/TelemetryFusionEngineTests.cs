@@ -19,6 +19,19 @@ namespace Sentinel.Tests
         public async ValueTask DisposeAsync() => await _engine.DisposeAsync();
 
         [Fact]
+        public void SameLifetimeObservationsAccumulateButReusedPidStartsFresh()
+        {
+            var first = new ProcessTelemetry { ProcessId = 400, ProcessName = "multi", CreationTime = 100 };
+            _engine.FeedEvent(first);
+            var duplicate = _engine.FeedEvent(new ProcessTelemetry { ProcessId = 400, ProcessName = "multi", CreationTime = 100 });
+            Assert.Equal(2, duplicate.EventCount60s);
+            var script = _engine.FeedEvent(new ProcessTelemetry { ProcessId = 400, ProcessName = "multi" });
+            Assert.Equal(3, script.EventCount60s);
+            var reused = _engine.FeedEvent(new ProcessTelemetry { ProcessId = 400, ProcessName = "multi", CreationTime = 200 });
+            Assert.Equal(1, reused.EventCount60s);
+        }
+
+        [Fact]
         public void FeedEvent_ReturnsContextWithCorrectPid()
         {
             var evt = new ProcessTelemetry

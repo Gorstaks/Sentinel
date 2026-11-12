@@ -193,7 +193,7 @@ namespace Sentinel.Core
                     RuleName = "Covert Webhook: Disposable Sink Lookup",
                     Evidence = $"DNS query for disposable webhook sink '{domain}' PID={pid} process='{processName}'",
                     Reasoning = attributed
-                        ? "This PID resolved a disposable webhook sink (webhook.site / interact.sh / ...). Credential-exfil DNS. Kill-grade C2."
+                        ? "This PID resolved a disposable webhook sink. Credential-exfil DNS. Kill-grade C2."
                         : "Unattributed DNS for a disposable webhook sink. Observe only until a process PID is known.",
                     Confidence = attributed ? 0.86 : 0.55,
                     Tier = attributed ? DetectionTier.Tier1Behavioral : DetectionTier.Tier2Indicator,

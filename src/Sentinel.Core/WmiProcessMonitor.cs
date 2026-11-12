@@ -184,6 +184,7 @@ namespace Sentinel.Core
                             var context = _fusionEngine.FeedEvent(new ProcessTelemetry
                             {
                                 Type = "process", ProcessId = pid, ProcessName = name,
+                                CreationTime = SecurityValidation.TryGetProcessCreationTime(pid),
                                 ImagePath = imagePath, Timestamp = DateTime.UtcNow
                             });
                             _detectionEngine.SubmitTelemetry(context);
@@ -220,6 +221,7 @@ namespace Sentinel.Core
                 var telemetry = new ProcessTelemetry
                 {
                     Type = "process",
+                    CreationTime = SecurityValidation.TryGetProcessCreationTime(pid),
                     ProcessId = pid,
                     ProcessName = name,
                     ParentProcessId = ppid,

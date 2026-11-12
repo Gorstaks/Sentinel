@@ -208,6 +208,7 @@ namespace Sentinel.Core
             {
                 ProcessName = processName,
                 ProcessId = pid,
+                CreationTime = SecurityValidation.TryGetProcessCreationTime(pid, _logger),
                 ParentProcessId = parentPid,
                 ParentProcessName = parentName,
                 ImagePath = imagePath,

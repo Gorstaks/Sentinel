@@ -13,3 +13,9 @@ namespace Sentinel.Core
         public static bool IsMicrosoftCommonName(string name) => throw new PlatformNotSupportedException();
     }
 }
+
+namespace System
+{
+    // Portable process identity for the self-telemetry exclusion; no Windows calls.
+    public static class Net48Environment { public static int ProcessId => Environment.ProcessId; }
+}

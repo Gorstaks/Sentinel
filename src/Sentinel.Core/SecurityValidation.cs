@@ -424,9 +424,19 @@ namespace Sentinel.Core
             return !string.IsNullOrEmpty(a) && string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
         }
 
-        /// <summary>
-        /// Returns true only if the signature is valid AND chains to a trusted root.
-        /// </summary>
+        /// <summary>Return the OS lifetime identity, or zero when it cannot be observed.</summary>
+        internal static long TryGetProcessCreationTime(int pid, Microsoft.Extensions.Logging.ILogger? logger = null)
+        {
+            try { return WindowsProcessTreeOperations.GetCreationTime(pid); }
+            catch (Exception ex)
+            {
+                if (logger != null) logger.LogDebug(ex, "Creation time unavailable for PID {Pid}", pid);
+                else System.Diagnostics.Debug.WriteLine("Process creation time unavailable: " + ex.Message);
+                return 0;
+            }
+        }
+
+        /// <summary>Returns true only if the signature is valid and chains to a trusted root.</summary>
         public static bool VerifyAuthenticodeSignature(string filePath, Microsoft.Extensions.Logging.ILogger? logger = null)
         {
             if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))

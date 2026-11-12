@@ -58,13 +58,6 @@ namespace Sentinel.Core
                 };
             }
 
-            // A process-start event begins a new generation even when Windows reuses PID/name.
-            if (telemetryEvent is ProcessTelemetry)
-            {
-                _processChains.TryRemove(pid, out _);
-                _eventGraph.ResetProcess(pid);
-            }
-
             // Shed excess chains on insert so a burst of distinct PIDs cannot spike RAM between
             // the 15s cleanup passes. Only applies when adding a brand-new PID.
             if (!_processChains.ContainsKey(pid) && _processChains.Count >= MaxTrackedPids)
@@ -76,6 +69,17 @@ namespace Sentinel.Core
 
             lock (chain)
             {
+                // ProcessTelemetry also carries script/snapshot observations. Reset only on
+                // an observed OS lifetime, not on every event of this CLR type.
+                if (telemetryEvent is ProcessTelemetry process && process.CreationTime > 0)
+                {
+                    var previous = chain.OfType<ProcessTelemetry>().LastOrDefault(p => p.CreationTime > 0);
+                    if (previous == null || previous.CreationTime != process.CreationTime)
+                    {
+                        chain.Clear();
+                        _eventGraph.ResetProcess(pid);
+                    }
+                }
                 chain.Add(telemetryEvent);
                 if (chain.Count > MaxEventsPerChain)
                 {

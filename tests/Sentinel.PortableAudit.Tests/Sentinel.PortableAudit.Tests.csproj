@@ -6,6 +6,9 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <Compile Include="../../src/Sentinel.Core/BoundedAsyncWork.cs" Link="BoundedAsyncWork.cs" />
+    <Compile Include="../../src/Sentinel.Core/TelemetryModels.cs" Link="TelemetryModels.cs" />
+    <Compile Include="../../src/Sentinel.Core/TelemetryFusionEngine.cs" Link="TelemetryFusionEngine.cs" />
+    <Compile Include="../Sentinel.Tests/TelemetryFusionEngineTests.cs" Link="TelemetryFusionEngineTests.cs" />
     <Compile Include="../../src/Sentinel.Core/EventGraph.cs" Link="EventGraph.cs" />
     <Compile Include="../../src/Sentinel.Core/SignerTrustService.cs" Link="SignerTrustService.cs" />
     <Compile Include="../../src/Sentinel.Core/JsonlRecordReader.cs" Link="JsonlRecordReader.cs" />
