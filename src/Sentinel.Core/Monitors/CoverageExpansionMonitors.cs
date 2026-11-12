@@ -139,7 +139,7 @@ namespace Sentinel.Core
                             if (InstallerHeuristics.LooksLikeInstallerName(name) ||
                                 InstallerHeuristics.IsDirectXOrRuntimeRedist(name, path))
                                 continue;
-                            if (SecurityValidation.IsGameOrAntiCheatPath(path)) continue;
+                            if (AlwaysOnPolicies.IsProtectedGamePath(path)) continue;
 
                             var key = $"stage:{pid}";
                             if (!ShouldAlert(key)) continue;

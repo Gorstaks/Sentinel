@@ -178,7 +178,7 @@ namespace Sentinel.Core
 
                 string imagePath = "";
                 imagePath = SecurityValidation.GetProcessImagePath(conn.OwnerPid) ?? "";
-                if (SecurityValidation.IsGameOrAntiCheatPath(imagePath))
+                if (AlwaysOnPolicies.IsProtectedGamePath(imagePath))
                     continue;
 
                 await _detectionEngine.EmitAsync(new DetectionEvent

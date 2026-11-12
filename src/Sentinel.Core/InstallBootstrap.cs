@@ -104,6 +104,8 @@ namespace Sentinel.Core
                     return 3;
                 }
 
+                // Preserve public key-derivation material before the installer deletes *.old.
+                SecureCacheStore.PreserveLegacyExecutableHashes(installDir);
                 EnsureService(serviceExe);
                 EnsureWatchdogService(serviceExe);
                 EnsureAgentRunKey(agentExe);

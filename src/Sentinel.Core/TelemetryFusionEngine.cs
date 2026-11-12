@@ -58,6 +58,13 @@ namespace Sentinel.Core
                 };
             }
 
+            // A process-start event begins a new generation even when Windows reuses PID/name.
+            if (telemetryEvent is ProcessTelemetry)
+            {
+                _processChains.TryRemove(pid, out _);
+                _eventGraph.ResetProcess(pid);
+            }
+
             // Shed excess chains on insert so a burst of distinct PIDs cannot spike RAM between
             // the 15s cleanup passes. Only applies when adding a brand-new PID.
             if (!_processChains.ContainsKey(pid) && _processChains.Count >= MaxTrackedPids)

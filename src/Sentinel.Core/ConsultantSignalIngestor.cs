@@ -237,31 +237,17 @@ namespace Sentinel.Core
 
                     fs.Seek(offset, SeekOrigin.Begin);
 
-                    using (var reader = new StreamReader(fs))
+                    _fileOffsets[filePath] = await JsonlRecordReader.ReadAsync(fs, offset, async line =>
                     {
-                        string? line;
-                        while ((line = await reader.ReadLineAsync()) != null)
+                        try
                         {
-                            if (string.IsNullOrWhiteSpace(line)) continue;
-                            try
-                            {
-                                var options = new JsonSerializerOptions
-                                {
-                                    PropertyNameCaseInsensitive = true
-                                };
-                                var detection = JsonSerializer.Deserialize<DetectionEvent>(line, options);
-                                if (detection != null)
-                                {
-                                    await _detectionEngine.SubmitConsultantSignalAsync(detection);
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.LogDebug(ex, "Failed to parse jsonl line in {FilePath}: {Line}", filePath, line);
-                            }
+                            var detection = JsonSerializer.Deserialize<DetectionEvent>(line,
+                                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                            if (detection != null) await _detectionEngine.SubmitConsultantSignalAsync(detection);
                         }
-                        _fileOffsets[filePath] = fs.Position;
-                    }
+                        catch (JsonException ex) { _logger.LogDebug(ex, "Invalid consultant JSONL record in {Path}", filePath); }
+                    }, ct);
+
                 }
             }
             catch (IOException)

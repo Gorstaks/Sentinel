@@ -61,15 +61,15 @@ namespace Sentinel.Tests
         }
 
         [Fact]
-        public void GameReputationSkip_AllowsProgramFilesAndXbox()
+        public void GameReputationSkip_DoesNotTrustUnverifiedInstallFragments()
         {
-            Assert.True(SecurityValidation.ShouldSkipReputationForGamePath(
+            Assert.False(SecurityValidation.ShouldSkipReputationForGamePath(
                 @"C:\Program Files (x86)\Steam\steamapps\common\Game\game.exe"));
-            Assert.True(SecurityValidation.ShouldSkipReputationForGamePath(
+            Assert.False(SecurityValidation.ShouldSkipReputationForGamePath(
                 @"C:\XboxGames\SomeGame\Content\game.exe"));
-            Assert.True(SecurityValidation.ShouldSkipReputationForGamePath(
+            Assert.False(SecurityValidation.ShouldSkipReputationForGamePath(
                 @"C:\Program Files\WindowsApps\Microsoft.GamingApp_1.0\XboxPcApp.exe"));
-            Assert.True(SecurityValidation.ShouldSkipReputationForGamePath(
+            Assert.False(SecurityValidation.ShouldSkipReputationForGamePath(
                 @"D:\SteamLibrary\steamapps\common\Game\game.exe"));
         }
 

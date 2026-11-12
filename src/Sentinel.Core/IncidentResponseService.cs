@@ -131,7 +131,7 @@ namespace Sentinel.Core
                             "[IncidentResponseService] Refusing quarantine of OS-critical path: {Path}",
                             imagePath);
                     }
-                    else if (SecurityValidation.IsGameOrAntiCheatPath(imagePath))
+                    else if (AlwaysOnPolicies.IsProtectedGamePath(imagePath))
                     {
                         evidence["QuarantineSkippedGamePath"] = imagePath!;
                     }

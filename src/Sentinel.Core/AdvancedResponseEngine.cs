@@ -810,7 +810,7 @@ namespace Sentinel.Core
                     // QUERY_LIMITED only - MainModule uses PROCESS_VM_READ (breaks anti-cheat)
                     var quarantinePath = SecurityValidation.GetProcessImagePath(detection.ProcessId)
                                         ?? proc.MainModule?.FileName;
-                    if (SecurityValidation.IsGameOrAntiCheatPath(quarantinePath))
+                    if (AlwaysOnPolicies.IsProtectedGamePath(quarantinePath))
                         quarantinePath = null; // never quarantine game binaries from path lookup races
                     if (!string.IsNullOrEmpty(quarantinePath) && File.Exists(quarantinePath))
                     {

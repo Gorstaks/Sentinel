@@ -44,7 +44,7 @@ namespace Sentinel.Agent
         private readonly SignerTrustService? _signerTrust;
         private readonly DllUnloadEngine? _dllUnload;
         private readonly string[] _eventLogPaths;
-        private readonly ConcurrentBag<WebSocket> _wsClients = new();
+        private readonly DashboardSocketClients _wsClients;
         private readonly SemaphoreSlim _dnsApprovalGate = new(1, 1);
         private readonly string _csrfToken;
         private readonly string _bearerToken;
@@ -63,6 +63,7 @@ namespace Sentinel.Agent
             _quarantine = quarantine;
             _config = config;
             _logger = logger;
+            _wsClients = new DashboardSocketClients(logger: logger);
             _signerTrust = signerTrust;
             _dllUnload = dllUnload;
             _eventLogPaths = new[] { Path.Combine(ProgramDataRoot, "events.jsonl"), eventLogger?.LogFilePath }
@@ -130,6 +131,7 @@ namespace Sentinel.Agent
         {
             try { _listener?.Stop(); } catch { }
             try { _listener?.Close(); } catch { }
+            _wsClients.Dispose();
             return base.StopAsync(cancellationToken);
         }
 
@@ -968,7 +970,7 @@ namespace Sentinel.Agent
             }
 
             var ws = wsContext.WebSocket;
-            _wsClients.Add(ws);
+            if (!_wsClients.TryAdd(ws)) { ws.Dispose(); return; }
 
             try
             {
@@ -984,35 +986,12 @@ namespace Sentinel.Agent
             catch { }
             finally
             {
-                try { ws.Dispose(); } catch { }
+                _wsClients.Remove(ws);
             }
         }
 
-        private async Task BroadcastEvent(string json)
-        {
-            var deadSockets = new List<WebSocket>();
-            foreach (var ws in _wsClients)
-            {
-                if (ws.State != WebSocketState.Open)
-                {
-                    deadSockets.Add(ws);
-                    continue;
-                }
-                try
-                {
-                    var buffer = Encoding.UTF8.GetBytes(json);
-                    await ws.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None)
-                        .ConfigureAwait(false);
-                }
-                catch
-                {
-                    deadSockets.Add(ws);
-                }
-            }
-
-            // Clean up dead sockets (ConcurrentBag doesn't support remove, rebuild if needed)
-            // This is fine for a small number of clients (typically 1-3 browser tabs)
-        }
+        private Task BroadcastEvent(string json, CancellationToken ct)
+            => _wsClients.BroadcastAsync(Encoding.UTF8.GetBytes(json), ct);
 
         private async Task WatchAndBroadcastEvents(CancellationToken ct)
         {
@@ -1047,7 +1026,7 @@ namespace Sentinel.Agent
                                 while ((line = reader.ReadLine()) != null)
                                 {
                                     if (!string.IsNullOrWhiteSpace(line))
-                                        await BroadcastEvent(line).ConfigureAwait(false);
+                                        await BroadcastEvent(line, ct).ConfigureAwait(false);
                                 }
                                 offsets[logFile] = fs.Position;
                             }

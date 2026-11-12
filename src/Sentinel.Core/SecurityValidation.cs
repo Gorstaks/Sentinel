@@ -424,58 +424,6 @@ namespace Sentinel.Core
             return !string.IsNullOrEmpty(a) && string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
         }
 
-        // WinVerifyTrust / catalog hash maps the PE. Uncached calls on the 5s
-        // file-watcher and module scan were the remaining hard pagefaults after WS pin.
-        //
-        // Tuple field meanings:
-        //   Write    - file LastWriteTimeUtc (cache invalidation key)
-        //   Length   - file Length           (cache invalidation key)
-        //   Signed   - WinVerifyTrust result
-        //   Cached   - wall-clock time this entry was inserted (for LRU trim)
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime Write, long Length, bool Signed, DateTime Cached)> AuthenticodeCache =
-            new(StringComparer.OrdinalIgnoreCase);
-
-        private const int AuthenticodeCacheMax = 20_000;
-        private const int AuthenticodeCacheTrim = 2_000; // evict oldest 10 % when cap is hit
-
-        private static void CacheAuthenticode(string path, DateTime writeUtc, long length, bool signed)
-        {
-            if (string.IsNullOrEmpty(path) || length < 0) return;
-            AuthenticodeCache[path] = (writeUtc, length, signed, DateTime.UtcNow);
-            if (AuthenticodeCache.Count > AuthenticodeCacheMax)
-                TrimAuthenticodeCache();
-        }
-
-        private static readonly object _authenticodeTrimLock = new();
-
-        private static void TrimAuthenticodeCache()
-        {
-            // Only one thread does the trim; others skip and let the next write retry.
-            if (!System.Threading.Monitor.TryEnter(_authenticodeTrimLock))
-                return;
-            try
-            {
-                // Re-check inside the lock - another thread may have already trimmed.
-                if (AuthenticodeCache.Count <= AuthenticodeCacheMax)
-                    return;
-
-                // Collect (path, insertedAt) pairs, sort oldest-first, remove the bottom 10 %.
-                var snapshot = new List<(string Path, DateTime Cached)>(AuthenticodeCache.Count);
-                foreach (var kv in AuthenticodeCache)
-                    snapshot.Add((kv.Key, kv.Value.Cached));
-
-                snapshot.Sort((a, b) => a.Cached.CompareTo(b.Cached));
-
-                int toRemove = Math.Max(AuthenticodeCacheTrim, snapshot.Count - AuthenticodeCacheMax);
-                for (int i = 0; i < toRemove && i < snapshot.Count; i++)
-                    AuthenticodeCache.TryRemove(snapshot[i].Path, out _);
-            }
-            finally
-            {
-                System.Threading.Monitor.Exit(_authenticodeTrimLock);
-            }
-        }
-
         /// <summary>
         /// Returns true only if the signature is valid AND chains to a trusted root.
         /// </summary>
@@ -484,23 +432,8 @@ namespace Sentinel.Core
             if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
                 return false;
 
-            DateTime writeUtc = DateTime.MinValue;
-            long length = -1;
-            try
-            {
-                var info = new FileInfo(filePath);
-                writeUtc = info.LastWriteTimeUtc;
-                length = info.Length;
-                if (AuthenticodeCache.TryGetValue(filePath, out var cached) &&
-                    cached.Write == writeUtc && cached.Length == length)
-                    return cached.Signed;
-            }
-            catch
-            {
-                /* fall through to verify */
-            }
-
             IntPtr fileInfoPtr = IntPtr.Zero;
+            bool fileInfoPtrMarshaled = false;
             try
             {
                 var fileInfo = new WINTRUST_FILE_INFO
@@ -513,6 +446,7 @@ namespace Sentinel.Core
 
                 fileInfoPtr = Marshal.AllocHGlobal(Marshal.SizeOf<WINTRUST_FILE_INFO>());
                 Marshal.StructureToPtr(fileInfo, fileInfoPtr, false);
+                fileInfoPtrMarshaled = true;
 
                 var trustData = new WINTRUST_DATA
                 {
@@ -526,11 +460,16 @@ namespace Sentinel.Core
                 };
 
                 var actionId = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-                int result = WinVerifyTrust(IntPtr.Zero, ref actionId, ref trustData);
+                int result;
+                try { result = WinVerifyTrust(IntPtr.Zero, ref actionId, ref trustData); }
+                finally
+                {
+                    trustData.dwStateAction = WTD_STATEACTION_CLOSE;
+                    WinVerifyTrust(IntPtr.Zero, ref actionId, ref trustData);
+                }
 
                 if (result == 0)
                 {
-                    CacheAuthenticode(filePath, writeUtc, length, true);
                     return true;
                 }
 
@@ -545,19 +484,20 @@ namespace Sentinel.Core
                 // dependency, no risk of poisoning. The catalog store is protected by Windows
                 // and only writable by TrustedInstaller.
                 bool catalog = VerifyCatalogSignature(filePath, logger);
-                CacheAuthenticode(filePath, writeUtc, length, catalog);
                 return catalog;
             }
             catch (Exception ex)
             {
                 logger?.LogDebug(ex, "[SecurityValidation] Authenticode verification failed for '{Path}'", filePath);
-                CacheAuthenticode(filePath, writeUtc, length, false);
                 return false;
             }
             finally
             {
                 if (fileInfoPtr != IntPtr.Zero)
+                {
+                    if (fileInfoPtrMarshaled) Marshal.DestroyStructure<WINTRUST_FILE_INFO>(fileInfoPtr);
                     Marshal.FreeHGlobal(fileInfoPtr);
+                }
             }
         }
 
@@ -684,6 +624,7 @@ namespace Sentinel.Core
             IntPtr hCatAdmin, Microsoft.Extensions.Logging.ILogger? logger)
         {
             IntPtr catInfoPtr = IntPtr.Zero;
+            bool catInfoPtrMarshaled = false;
             try
             {
                 var catWintrustInfo = new WINTRUST_CATALOG_INFO
@@ -701,6 +642,7 @@ namespace Sentinel.Core
 
                 catInfoPtr = Marshal.AllocHGlobal(Marshal.SizeOf<WINTRUST_CATALOG_INFO>());
                 Marshal.StructureToPtr(catWintrustInfo, catInfoPtr, false);
+                catInfoPtrMarshaled = true;
 
                 var trustData = new WINTRUST_DATA
                 {
@@ -714,13 +656,14 @@ namespace Sentinel.Core
                 };
 
                 var actionId = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-                int result = WinVerifyTrust(IntPtr.Zero, ref actionId, ref trustData);
+                int result;
+                try { result = WinVerifyTrust(IntPtr.Zero, ref actionId, ref trustData); }
+                finally
+                {
+                    trustData.dwStateAction = WTD_STATEACTION_CLOSE;
+                    WinVerifyTrust(IntPtr.Zero, ref actionId, ref trustData);
+                }
 
-                // AUDIT v1.5.6 (BT-MEDIUM-1): Close the trust provider state to prevent
-                // internal wintrust.dll memory leaks. Required per Windows SDK documentation
-                // after any WTD_STATEACTION_VERIFY call.
-                trustData.dwStateAction = WTD_STATEACTION_CLOSE;
-                WinVerifyTrust(IntPtr.Zero, ref actionId, ref trustData);
 
                 if (result == 0)
                 {
@@ -736,7 +679,10 @@ namespace Sentinel.Core
             finally
             {
                 if (catInfoPtr != IntPtr.Zero)
+                {
+                    if (catInfoPtrMarshaled) Marshal.DestroyStructure<WINTRUST_CATALOG_INFO>(catInfoPtr);
                     Marshal.FreeHGlobal(catInfoPtr);
+                }
             }
         }
 
@@ -838,16 +784,12 @@ namespace Sentinel.Core
         }
 
         /// <summary>
-        /// v2.2.0: Reputation / hash-skip for entertainment binaries. Requires a game-tree
-        /// fragment AND must not be under a user-writable staging path. Memory-inspection
-        /// skip may still use <see cref="IsGameOrAntiCheatPath"/> (Denuvo on D:\ is fine;
-        /// reputation skip is the trust grant).
+        /// Reputation skips require verified, signed, ACL-protected game identity.
+        /// Memory-inspection compatibility still uses IsGameOrAntiCheatPath independently.
         /// </summary>
         public static bool ShouldSkipReputationForGamePath(string? path)
         {
-            if (string.IsNullOrEmpty(path)) return false;
-            if (IsUserProfileOrStagingPath(path)) return false;
-            return IsGameOrAntiCheatPath(path);
+            return AlwaysOnPolicies.IsProtectedGamePath(path);
         }
 
         /// <summary>
